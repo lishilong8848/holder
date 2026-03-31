@@ -368,11 +368,6 @@ class IntegratedCertificateSystem:
                         setattr(person, sf, "✔️" if expire_date >= today else "❌")
                     except: pass
 
-    def export_to_json(self, filename="查询结果.json"):
-        data = [p.to_dict() for p in self.people]
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"结果已导出到: {filename}")
 
     def print_summary(self):
         print("\n========== 查询结果摘要 ==========")
@@ -420,7 +415,6 @@ def run_certificate_query(app_id, app_secret, app_token, table_id, query_all=Tru
     sys.load_from_feishu()
     sys.query_certificates(max_count=query_count)
     sys.print_summary()
-    sys.export_to_json()
     fu = {"success": 0, "failed": 0}
     if auto_update_feishu: fu = sys.update_feishu()
     return {"total": len(sys.people), "queried": sum(1 for p in sys.people if p.查询状态), "success": sum(1 for p in sys.people if p.查询状态 == "success"), "feishu_updated": fu, "people": sys.people}
@@ -434,7 +428,6 @@ def main():
     elif choice == "2": sys.query_certificates(max_count=5)
     else: return
     sys.print_summary()
-    sys.export_to_json()
     if sum(1 for p in sys.people if p.查询状态 == "success") > 0:
         if input("是否更新飞书？(y/n): ").lower() == 'y': sys.update_feishu()
 

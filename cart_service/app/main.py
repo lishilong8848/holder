@@ -259,14 +259,6 @@ class IntegratedCertificateSystem:
         """获取所有人员信息（包含查询结果）"""
         return self.people
 
-    def export_to_json(self, filename: str = "查询结果.json"):
-        """导出结果到JSON文件"""
-        data = [p.to_dict() for p in self.people]
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"结果已导出到: {filename}")
-        return filename
-
     def print_summary(self):
         """打印查询结果摘要"""
         print("\n========== 查询结果摘要 ==========")
@@ -452,11 +444,8 @@ def run_certificate_query(
     fail_count = sum(1 for p in people if p.查询状态 and p.查询状态 != "success")
     queried_count = sum(1 for p in people if p.查询状态)
 
-    # 5. 打印摘要
+    # 6. 统计结果摘要
     system.print_summary()
-
-    # 6. 导出结果
-    system.export_to_json()
 
     # 7. 更新飞书表格
     feishu_result = {"success": 0, "failed": 0}
@@ -509,11 +498,8 @@ def main():
         print("已取消查询")
         return
 
-    # 3. 打印摘要
+    # 4. 打印摘要
     system.print_summary()
-
-    # 4. 导出结果
-    system.export_to_json()
 
     # 5. 询问是否更新飞书表格
     success_count = sum(1 for p in people if p.查询状态 == "success")
