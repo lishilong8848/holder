@@ -1,0 +1,1571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高低压证书自动化查询系统</title>
+
+    <!-- Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <style>
+        :root {
+            /* Palette: Slate & Indigo */
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --primary-light: #e0e7ff;
+
+            --bg-body: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-input: #f1f5f9;
+            --bg-console: #0f172a;
+
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --text-light: #94a3b8;
+            --text-console: #e2e8f0;
+
+            --border: #e2e8f0;
+            --border-focus: #4f46e5;
+
+            --success: #10b981;
+            --error: #ef4444;
+            --warning: #f59e0b;
+
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', "Microsoft YaHei", sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: var(--shadow-sm);
+            z-index: 10;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 700;
+            font-size: 1.25rem;
+            color: var(--text-main);
+        }
+
+        .brand i {
+            font-size: 1.5rem;
+            color: var(--primary);
+        }
+
+        .top-status {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--text-light);
+        }
+
+        .status-dot.active {
+            background-color: var(--success);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+        }
+
+        .status-dot.busy {
+            background-color: var(--primary);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 6px rgba(79, 70, 229, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
+            }
+        }
+
+        /* Main Layout */
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 380px 1fr;
+            gap: 0;
+            height: calc(100vh - 65px);
+            /* Minus header height */
+        }
+
+        /* Sidebar - Config */
+        .sidebar {
+            background: var(--bg-card);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .section-title {
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin-bottom: 0.75rem;
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 1rem;
+            position: relative;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-main);
+            margin-bottom: 0.375rem;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-wrapper i {
+            position: absolute;
+            left: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-light);
+            pointer-events: none;
+            transition: color 0.2s;
+        }
+
+        input[type="text"],
+        input[type="password"],
+        input[type="number"] {
+            width: 100%;
+            padding: 0.625rem 0.75rem 0.625rem 2.25rem;
+            /* Left padding for icon */
+            font-family: inherit;
+            font-size: 0.9rem;
+            color: var(--text-main);
+            background-color: var(--bg-input);
+            border: 1px solid transparent;
+            border-radius: var(--radius-md);
+            transition: all 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            background-color: var(--bg-card);
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        input:focus+i {
+            color: var(--primary);
+        }
+
+        /* Radio & Toggle */
+        .radio-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            background: var(--bg-input);
+            padding: 0.25rem;
+            border-radius: var(--radius-md);
+        }
+
+        .radio-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.375rem;
+            padding: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        .radio-label:hover {
+            color: var(--text-main);
+        }
+
+        input[type="radio"] {
+            display: none;
+        }
+
+        input[type="radio"]:checked+.radio-label {
+            background-color: var(--bg-card);
+            color: var(--primary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Toggle Switch */
+        .toggle-wrapper {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem;
+            background: var(--bg-input);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+        }
+
+        .toggle-text {
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #cbd5e1;
+            border-radius: 99px;
+            transition: 0.3s;
+        }
+
+        .toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border-radius: 50%;
+            transition: 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+
+        input[type="checkbox"] {
+            display: none;
+        }
+
+        input[type="checkbox"]:checked+.toggle-switch {
+            background: var(--primary);
+        }
+
+        input[type="checkbox"]:checked+.toggle-switch::after {
+            transform: translateX(20px);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            width: 100%;
+            padding: 0.75rem 1rem;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            border-radius: var(--radius-md);
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: white;
+            box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 8px -1px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background-color: var(--bg-input);
+            color: var(--text-main);
+            border-color: var(--text-light);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Content Area - Terminal */
+        .content-area {
+            display: flex;
+            flex-direction: column;
+            padding: 1.5rem;
+            background: var(--bg-body);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .panel-title {
+            font-weight: 600;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .terminal-window {
+            flex: 1;
+            background: var(--bg-console);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid #334155;
+        }
+
+        .terminal-header {
+            background: #1e293b;
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .terminal-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .dot-red {
+            background: #ef4444;
+        }
+
+        .dot-yellow {
+            background: #f59e0b;
+        }
+
+        .dot-green {
+            background: #10b981;
+        }
+
+        .terminal-title {
+            margin-left: 0.5rem;
+            color: #94a3b8;
+            font-size: 0.75rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-body {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            color: var(--text-console);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .terminal-body::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+
+        /* Stats Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: transform 0.2s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .stat-info .label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .stat-info .value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-top: 0.125rem;
+        }
+
+        .icon-blue {
+            background: #eff6ff;
+            color: #3b82f6;
+        }
+
+        .icon-green {
+            background: #ecfdf5;
+            color: #10b981;
+        }
+
+        .icon-red {
+            background: #fef2f2;
+            color: #ef4444;
+        }
+
+
+        /* Modal & Animations */
+        @keyframes modalFadeIn {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes modalSlideUp {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.6);
+            /* Slate-900 with opacity */
+            backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            animation: modalFadeIn 0.3s ease-out forwards;
+        }
+
+        .modal-content {
+            background: rgba(255, 255, 255, 0.95);
+            width: 90%;
+            max-width: 900px;
+            height: 85%;
+            border-radius: var(--radius-lg);
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            animation: modalSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            padding: 1.25rem 2rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(248, 250, 252, 0.5);
+        }
+
+        .modal-header h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+
+        .icon-btn {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .icon-btn:hover {
+            color: var(--error);
+            border-color: #fecaca;
+            background: #fef2f2;
+            transform: rotate(90deg);
+        }
+
+        /* Premium Table */
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.875rem;
+        }
+
+        .data-table th {
+            background: #f8fafc;
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: blur(4px);
+        }
+
+        .data-table td {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-main);
+            transition: background 0.15s;
+        }
+
+        .data-table tr:hover td {
+            background: #f8fafc;
+        }
+
+        .data-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.5rem;
+            border-radius: 99px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .status-pending {
+            background: #f1f5f9;
+            color: #64748b;
+        }
+
+        .status-success {
+            background: #ecfdf5;
+            color: #10b981;
+        }
+
+        .status-error {
+            background: #fef2f2;
+            color: #ef4444;
+        }
+
+        .cert-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin-right: 4px;
+            border: 1px solid transparent;
+        }
+
+        .cert-badge.status-success {
+            background: #f0fdf4;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .cert-badge.status-error {
+            background: #fef2f2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .cert-badge.status-pending {
+            background: #f8fafc;
+            border-color: #e2e8f0;
+            color: #64748b;
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="brand">
+            <i class="ri-shield-check-fill"></i>
+            <span>自动查询 <small
+                    style="font-weight: 400; color: var(--text-muted); font-size: 0.8em; margin-left: 0.3em;">系统</small></span>
+        </div>
+        <div class="top-status">
+            <div class="status-item">
+                <div class="status-dot" id="serverStatusDot"></div>
+                <span id="serverStatusText">连接中...</span>
+            </div>
+            <div class="status-item">
+                <i class="ri-time-line"></i>
+                <span id="currentTime">--:--</span>
+            </div>
+            <button onclick="toggleHistoryModal()" class="btn btn-secondary"
+                style="width: auto; padding: 0.25rem 0.5rem; font-size: 1.1rem; border-color: transparent; margin-left: 0.5rem;">
+                <i class="ri-history-line"></i>
+            </button>
+            <button onclick="toggleSettingsModal()" class="btn btn-secondary"
+                style="width: auto; padding: 0.25rem 0.5rem; font-size: 1.1rem; border-color: transparent;">
+                <i class="ri-settings-4-line"></i>
+            </button>
+            <button onclick="shutdownSystem()" class="btn btn-secondary"
+                style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.8rem; margin-left: 0.5rem; border-color: var(--error); color: var(--error);">
+                <i class="ri-shut-down-line"></i> 退出系统
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div style="flex: 1;">
+                <div class="section-title">公开 API 说明</div>
+                <div
+                    style="background: var(--bg-input); padding: 0.75rem; border-radius: 8px; font-size: 0.8rem; border: 1px dashed var(--primary); margin-bottom: 1.5rem;">
+                    <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--primary);">
+                        <i class="ri-links-line"></i> 同步查询接口
+                    </p>
+                    <p style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 0.8rem; line-height: 1.4;">
+                        外部系统可直接调用此接口。调用时请将下方 URL 中的 <code id="hostHint">127.0.0.1</code> 替换为本机的局域网 IP。
+                    </p>
+
+                    <div style="margin-bottom: 0.8rem;">
+                        <span
+                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">请求路径:</span>
+                        <code style="background: #e2e8f0; padding: 0.2rem 0.4rem; border-radius: 4px; font-weight: 600;"
+                            id="apiUrlHint">http://127.0.0.1:58000/api/v1/query/batch</code>
+                    </div>
+
+                    <div style="margin-bottom: 0.8rem;">
+                        <span
+                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">参数格式:</span>
+                        <div
+                            style="background: #1e293b; color: #94a3b8; padding: 0.5rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;">
+                            {<br>
+                            &nbsp;&nbsp;"people": [<br>
+                            &nbsp;&nbsp;&nbsp;&nbsp;{"name": "姓名", "id_number": "身份证号"}<br>
+                            &nbsp;&nbsp;]<br>
+                            }
+                        </div>
+                    </div>
+
+                    <div style="margin-bottom: 0.3rem;">
+                        <span
+                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">CURL
+                            示例:</span>
+                        <div
+                            style="background: #1e293b; color: #e2e8f0; padding: 0.5rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; white-space: normal; word-break: break-all;">
+                            <code>curl -X POST "<span class="current-origin"></span>/api/v1/query/batch" -H "Content-Type: application/json" -d '{"people":[{"name":"李世龙","id_number":"..."}]}'</code>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title">同步查询控制</div>
+                <div class="form-group">
+                    <div class="radio-group" style="margin-bottom: 0.75rem;">
+                        <label>
+                            <input type="radio" name="query_mode" value="all" checked onchange="toggleCountInput()">
+                            <span class="radio-label"><i class="ri-stack-line"></i> 查询全部</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="query_mode" value="count" onchange="toggleCountInput()">
+                            <span class="radio-label"><i class="ri-numbers-line"></i> 指定数量</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="count_input_group" style="display: none;">
+                    <label class="form-label">数量限制</label>
+                    <div class="input-wrapper">
+                        <input type="number" id="query_count" value="5" min="1">
+                        <i class="ri-hashtag"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: auto; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+                <div class="section-title">手动测试 (API 路由调试)</div>
+                <textarea id="batch_people_input" placeholder='[{"name": "李世龙", "id_number": "1301...X"}]'
+                    style="width: 100%; height: 80px; padding: 0.5rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; margin-bottom: 0.75rem; resize: none;"></textarea>
+                <button id="batchStartBtn" class="btn btn-secondary" onclick="startBatchTask()"
+                    style="margin-bottom: 1.5rem; background-color: var(--primary-light); border-color: transparent; color: var(--primary);">
+                    <i class="ri-terminal-line"></i> 通过 API 执行查询
+                </button>
+
+                <button id="startBtn" class="btn btn-primary" onclick="startTask()" style="height: 48px;">
+                    <i class="ri-refresh-line"></i> 开启飞书同步任务
+                </button>
+            </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="content-area">
+
+            <!-- Personnel List Controls -->
+            <div style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between;">
+                <button class="btn btn-secondary" onclick="togglePersonnelModal()" style="width: auto;">
+                    <i class="ri-team-line"></i> 飞书人员列表 (<span id="personnelCount">0</span>)
+                </button>
+                <button id="showBatchResultBtn" class="btn btn-secondary" onclick="toggleBatchResultModal()"
+                    style="width: auto; display: none; border-color: var(--success); color: var(--success);">
+                    <i class="ri-table-line"></i> 查看批量查询结果 (<span id="batchResultCount">0</span>)
+                </button>
+            </div>
+
+            <!-- Personnel Modal -->
+            <div id="personnelModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>飞书人员查询详情</h3>
+                        <button class="icon-btn" onclick="togglePersonnelModal()"><i class="ri-close-line"></i></button>
+                    </div>
+                    <div class="modal-body">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th style="width: 50px;">序号</th>
+                                    <th>姓名</th>
+                                    <th>员工工号</th>
+                                    <th>岗位</th>
+                                    <th>身份证号</th>
+                                    <th>证书情况</th>
+                                </tr>
+                            </thead>
+                            <tbody id="personnelTableBody">
+                                <!-- Populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Result Modal -->
+            <div id="batchResultModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content" style="max-width: 1200px;">
+                    <div class="modal-header">
+                        <h3>批量查询结果表格</h3>
+                        <button class="icon-btn" onclick="toggleBatchResultModal()"><i
+                                class="ri-close-line"></i></button>
+                    </div>
+                    <div class="modal-body">
+                        <div
+                            style="padding: 1rem; background: #fff; position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--border); display: flex; justify-content: flex-end;">
+                            <button class="btn btn-secondary" onclick="exportBatchToCSV()"
+                                style="width: auto; font-size: 0.8rem;">
+                                <i class="ri-download-2-line"></i> 导出 CSV
+                            </button>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>姓名</th>
+                                    <th>初领日期</th>
+                                    <th>性别</th>
+                                    <th>应复审日期</th>
+                                    <th>作业类别</th>
+                                    <th>有效期开始日期</th>
+                                    <th>操作项目</th>
+                                    <th>有效期结束日期</th>
+                                    <th>签发机关</th>
+                                    <th>实际复审日期</th>
+                                    <th>复审单位</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batchResultTableBody">
+                                <!-- Populated via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- Shutdown Modal -->
+            <div id="shutdownModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content"
+                    style="max-width: 400px; height: auto; border: 1px solid #fecaca; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+                    <div class="modal-header" style="background: #fef2f2; border-bottom: 1px solid #fee2e2;">
+                        <h3 style="color: #991b1b;"><i class="ri-alert-fill" style="color: #ef4444;"></i> 确认退出</h3>
+                        <button class="icon-btn" onclick="toggleShutdownModal()"><i class="ri-close-line"></i></button>
+                    </div>
+                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
+                        <p style="color: var(--text-main); font-size: 1rem; margin-bottom: 0.5rem; font-weight: 500;">
+                            确定要停止服务并退出系统吗？</p>
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">此操作将关闭服务器并清理所有浏览器进程。</p>
+
+                        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                            <button class="btn btn-secondary" onclick="toggleShutdownModal()">取消</button>
+                            <button class="btn btn-primary" onclick="confirmShutdown()"
+                                style="background-color: #ef4444; border-color: #ef4444;">
+                                <i class="ri-shut-down-line"></i> 确认退出
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Confirm Modal -->
+            <div id="batchConfirmModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content"
+                    style="max-width: 400px; height: auto; border: 1px solid #bfdbfe; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+                    <div class="modal-header" style="background: #eff6ff; border-bottom: 1px solid #dbeafe;">
+                        <h3 style="color: #1e40af;"><i class="ri-information-fill" style="color: #3b82f6;"></i> 确认开始批量查询
+                        </h3>
+                        <button class="icon-btn" onclick="toggleBatchConfirmModal()"><i
+                                class="ri-close-line"></i></button>
+                    </div>
+                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
+                        <p style="color: var(--text-main); font-size: 1rem; margin-bottom: 0.5rem; font-weight: 500;">
+                            确定要开始执行 API 同步查询吗？</p>
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">系统将按照您输入的人员列表逐一进行同步查询。</p>
+
+                        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                            <button class="btn btn-secondary" onclick="toggleBatchConfirmModal()">取消</button>
+                            <button class="btn btn-primary" onclick="confirmBatchStart()"
+                                style="background-color: #3b82f6; border-color: #3b82f6;">
+                                <i class="ri-play-line"></i> 立即开始
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Warning/Alert Modal -->
+            <div id="warningModal" class="modal-overlay" style="display: none;">
+                <div class="modal-content"
+                    style="max-width: 400px; height: auto; border: 1px solid #fde68a; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+                    <div class="modal-header" style="background: #fffbeb; border-bottom: 1px solid #fef3c7;">
+                        <h3 style="color: #92400e;"><i class="ri-error-warning-fill" style="color: #f59e0b;"></i> <span
+                                id="warningTitle">提示</span></h3>
+                        <button class="icon-btn" onclick="toggleWarningModal()"><i class="ri-close-line"></i></button>
+                    </div>
+                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
+                        <p id="warningMessage"
+                            style="color: var(--text-main); font-size: 1rem; margin-bottom: 1.5rem; white-space: pre-wrap; line-height: 1.5;">
+                        </p>
+                        <div style="display: flex; justify-content: center;">
+                            <button class="btn btn-primary" onclick="toggleWarningModal()"
+                                style="background-color: #f59e0b; border-color: #f59e0b; width: auto; padding: 0.5rem 2rem;">
+                                知道了
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-header">
+                <div class="panel-title">
+                    <i class="ri-terminal-box-line"></i>
+                    系统日志
+                </div>
+                <div id="downloadArea" style="display: none;">
+                    <a id="lastDownloadLink" href="#" class="btn btn-secondary"
+                        style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; border-color: var(--success); color: var(--success); background: #f0fdf4;">
+                        <i class="ri-download-cloud-2-line"></i> 下载本次结果 (.xlsx)
+                    </a>
+                </div>
+            </div>
+
+            <div class="terminal-window" style="margin-bottom: 0;">
+                <div class="terminal-header">
+                    <div class="terminal-dot dot-red"></div>
+                    <div class="terminal-dot dot-yellow"></div>
+                    <div class="terminal-dot dot-green"></div>
+                    <div class="terminal-title">server_logs.log</div>
+                </div>
+                <div class="terminal-body" id="console">正在初始化日志连接...</div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content" style="max-width: 500px; height: auto;">
+                <div class="modal-header">
+                    <h3>系统设置</h3>
+                    <button class="icon-btn" onclick="toggleSettingsModal()"><i class="ri-close-line"></i></button>
+                </div>
+                <div class="modal-body" style="padding: 1.5rem;">
+                    <div class="section-title">飞书 API 配置</div>
+                    <div class="form-group">
+                        <label class="form-label" for="app_id">App ID</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="app_id" placeholder="cli_a4..." autocomplete="off">
+                            <i class="ri-key-2-line"></i>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="app_secret">App Secret</label>
+                        <div class="input-wrapper">
+                            <input type="password" id="app_secret" placeholder="••••••••" autocomplete="off">
+                            <i class="ri-lock-password-line"></i>
+                        </div>
+                    </div>
+
+                    <div class="section-title" style="margin-top: 1.5rem;">飞书表格配置</div>
+                    <div class="form-group">
+                        <label class="form-label" for="app_token">App Token</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="app_token" placeholder="N0c..." autocomplete="off">
+                            <i class="ri-table-line"></i>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="table_id">Table ID</label>
+                        <div class="input-wrapper">
+                            <input type="text" id="table_id" placeholder="tbl..." autocomplete="off">
+                            <i class="ri-list-check"></i>
+                        </div>
+                    </div>
+
+                    <div class="section-title" style="margin-top: 1.5rem;">任务策略</div>
+                    <label class="toggle-wrapper" for="auto_update">
+                        <span class="toggle-text">完成后自动回填飞书</span>
+                        <input type="checkbox" id="auto_update" checked>
+                        <span class="toggle-switch"></span>
+                    </label>
+
+                    <div style="margin-top: 2rem;">
+                        <button id="saveConfigBtn" class="btn btn-primary" onclick="saveConfig()">
+                            <i class="ri-save-line"></i> 保存并应用配置
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- History Modal -->
+        <div id="historyModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content" style="max-width: 700px;">
+                <div class="modal-header">
+                    <h3>历史汇总表格</h3>
+                    <button class="icon-btn" onclick="toggleHistoryModal()"><i class="ri-close-line"></i></button>
+                </div>
+                <div class="modal-body">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>生成时间</th>
+                                <th>文件名称</th>
+                                <th>大小</th>
+                                <th style="width: 80px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTableBody">
+                            <!-- Populated via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- Conf Logic ---
+        function loadConfig() {
+            try {
+                const config = JSON.parse(localStorage.getItem('cert_query_config') || '{}');
+                if (config.app_id) document.getElementById('app_id').value = config.app_id;
+                if (config.app_secret) document.getElementById('app_secret').value = config.app_secret;
+                if (config.app_token) document.getElementById('app_token').value = config.app_token;
+                if (config.table_id) document.getElementById('table_id').value = config.table_id;
+                if (config.auto_update !== undefined) document.getElementById('auto_update').checked = config.auto_update;
+            } catch (e) { }
+        }
+
+        function saveConfig() {
+            const config = {
+                app_id: document.getElementById('app_id').value,
+                app_secret: document.getElementById('app_secret').value,
+                app_token: document.getElementById('app_token').value,
+                table_id: document.getElementById('table_id').value,
+                auto_update: document.getElementById('auto_update').checked
+            };
+            localStorage.setItem('cert_query_config', JSON.stringify(config));
+
+            // Visual feedback
+            const btn = document.getElementById('saveConfigBtn');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="ri-check-line"></i> 配置已保存';
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                toggleSettingsModal(); // Auto close
+            }, 800);
+        }
+
+        function toggleCountInput() {
+            const mode = document.querySelector('input[name="query_mode"]:checked').value;
+            document.getElementById('count_input_group').style.display = mode === 'count' ? 'block' : 'none';
+        }
+
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').innerText = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+
+        // --- Personnel Table Logic ---
+        function togglePersonnelModal() {
+            const modal = document.getElementById('personnelModal');
+            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function toggleSettingsModal() {
+            const modal = document.getElementById('settingsModal');
+            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function toggleHistoryModal() {
+            const modal = document.getElementById('historyModal');
+            const isShowing = modal.style.display !== 'none';
+            modal.style.display = isShowing ? 'none' : 'flex';
+            if (!isShowing) fetchHistory();
+        }
+
+        function toggleBatchConfirmModal() {
+            const modal = document.getElementById('batchConfirmModal');
+            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function toggleWarningModal() {
+            const modal = document.getElementById('warningModal');
+            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function showWarning(title, message) {
+            document.getElementById('warningTitle').innerText = title;
+            document.getElementById('warningMessage').innerText = message;
+            toggleWarningModal();
+        }
+
+        async function fetchHistory() {
+            const tbody = document.getElementById('historyTableBody');
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">正在加载...</td></tr>';
+            try {
+                const response = await fetch('/api/history');
+                const files = await response.json();
+                if (files.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">暂无历史记录</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = files.map(f => `
+                    <tr>
+                        <td style="font-size: 0.8rem; color: var(--text-muted);">${f.created_at}</td>
+                        <td style="font-weight: 500;">${f.filename}</td>
+                        <td style="font-size: 0.75rem;">${f.size}</td>
+                        <td>
+                            <a href="/api/download/${encodeURIComponent(f.filename)}" class="btn btn-secondary" style="width: auto; padding: 0.15rem 0.5rem; font-size: 0.7rem;">
+                                <i class="ri-download-2-line"></i> 下载
+                            </a>
+                        </td>
+                    </tr>
+                `).join('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--error);">加载失败</td></tr>';
+            }
+        }
+
+        function updatePersonnelTable(people) {
+            const tbody = document.getElementById('personnelTableBody');
+            if (people.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--text-muted);">暂无数据</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = people.map((p, index) => {
+
+                // Helper to parse the raw status string which might be a python repr string or simple string
+                const parseStatus = (val) => {
+                    if (!val) return null;
+                    const strVal = String(val);
+                    if (strVal.includes('✔️') || strVal.includes('text\': \'✔️')) return 'valid';
+                    if (strVal.includes('❌') || strVal.includes('text\': \'❌')) return 'invalid';
+                    return null;
+                };
+
+                const certs = [
+                    { label: '高压', val: p.高压证_是否有效 },
+                    { label: '低压', val: p.低压证_是否有效 },
+                    { label: '制冷', val: p.制冷证_是否有效 },
+                    { label: '登高', val: p.登高证_是否有效 },
+                ];
+
+                const certBadges = certs.map(c => {
+                    const status = parseStatus(c.val);
+                    if (!status) return '';
+
+                    const cls = status === 'valid' ? 'status-success' : 'status-error';
+                    const icon = status === 'valid' ? '<i class="ri-check-line"></i>' : '<i class="ri-close-line"></i>';
+                    return `<span class="cert-badge ${cls}">${c.label} ${icon}</span>`;
+                }).join('');
+
+                return `
+                    <tr>
+                        <td style="color: var(--text-muted);">${index + 1}</td>
+                        <td style="font-weight: 500;">${p.姓名}</td>
+                        <td>${p.员工工号 || '-'}</td>
+                        <td>${p.岗位 || '-'}</td>
+                        <td style="font-family: monospace;">${p.身份证号 || '-'}</td>
+                        <td>${certBadges || '<span style="color:#d1d5db">-</span>'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // --- App Logic ---
+        let isRunning = false;
+        let pollInterval = null;
+
+        async function startTask() {
+            if (isRunning) return;
+
+            const params = {
+                app_id: document.getElementById('app_id').value,
+                app_secret: document.getElementById('app_secret').value,
+                app_token: document.getElementById('app_token').value,
+                table_id: document.getElementById('table_id').value,
+                query_mode: document.querySelector('input[name="query_mode"]:checked').value,
+                query_count: parseInt(document.getElementById('query_count').value) || 5,
+                auto_update: document.getElementById('auto_update').checked
+            };
+
+            if (!params.app_id || !params.app_secret) {
+                alert('请填写必要参数 (App ID, App Secret)');
+                return;
+            }
+
+            try {
+                const btn = document.getElementById('startBtn');
+                btn.disabled = true;
+                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 正在启动...';
+
+                setServerStatus('busy', '任务启动中');
+
+                const response = await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(params)
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to start');
+                }
+
+                isRunning = true;
+                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 任务进行中...';
+
+                // Clear logs
+                document.getElementById('console').innerText = '任务已进入队列...\n';
+
+                // Start polling logs
+                if (pollInterval) clearInterval(pollInterval);
+                pollInterval = setInterval(pollStatus, 1000);
+
+            } catch (e) {
+                alert('启动失败: ' + e.message);
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('startBtn').innerHTML = '<i class="ri-play-fill"></i> 开始查询任务';
+                setServerStatus('active', '错误'); // green dot but error text? actually red dot better but simpler logic first
+            }
+        }
+
+        async function pollStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                const consoleDiv = document.getElementById('console');
+                const isScrolledToBottom = consoleDiv.scrollHeight - consoleDiv.scrollTop <= consoleDiv.clientHeight + 50;
+
+                if (data.logs) {
+                    consoleDiv.innerText = data.logs;
+                    // parseStatsFromLogs(data.logs); // Removed old stats parsing
+                }
+
+                if (data.people) {
+                    updatePersonnelTable(data.people);
+                    document.getElementById('personnelCount').innerText = data.people.length;
+                }
+
+                if (isScrolledToBottom) {
+                    consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                }
+
+                if (!isRunning && data.is_running) {
+                    // Recovering state
+                    isRunning = true;
+                    setServerStatus('busy', '运行中');
+                    const btn = document.getElementById('startBtn');
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 任务进行中...';
+                }
+
+                if (!data.is_running && isRunning) {
+                    // Task finished
+                    isRunning = false;
+                    clearInterval(pollInterval);
+
+                    const btn = document.getElementById('startBtn');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="ri-play-fill"></i> 开始飞书同步任务';
+
+                    const batchBtn = document.getElementById('batchStartBtn');
+                    batchBtn.disabled = false;
+                    batchBtn.innerHTML = '<i class="ri-terminal-line"></i> 通过 API 执行查询';
+
+                    setServerStatus('active', '就绪');
+
+                    // Show download button if result file exists
+                    if (data.excel_file) {
+                        const dlArea = document.getElementById('downloadArea');
+                        const dlLink = document.getElementById('lastDownloadLink');
+                        dlLink.href = `/api/download/${encodeURIComponent(data.excel_file)}`;
+                        dlArea.style.display = 'block';
+                    }
+
+                    // If batch results are available, show the result modal and button
+                    if (data.batch_results && data.batch_results.length > 0) {
+                        updateBatchResultTable(data.batch_results);
+                        document.getElementById('showBatchResultBtn').style.display = 'flex';
+                        document.getElementById('batchResultCount').innerText = data.batch_results.length;
+                        toggleBatchResultModal(true);
+                    }
+                }
+
+                // Initial connect valid
+                if (!isRunning && !pollInterval) {
+                    setServerStatus('active', '就绪');
+                }
+
+            } catch (e) {
+                setServerStatus('inactive', '已断开');
+            }
+        }
+
+        function setServerStatus(state, text) {
+            const dot = document.getElementById('serverStatusDot');
+            const label = document.getElementById('serverStatusText');
+
+            dot.className = 'status-dot ' + state;
+            label.innerText = text;
+        }
+
+        // --- Batch Search Logic ---
+        function toggleBatchResultModal(show) {
+            const modal = document.getElementById('batchResultModal');
+            if (show === true) modal.style.display = 'flex';
+            else if (show === false) modal.style.display = 'none';
+            else modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function updateBatchResultTable(results) {
+            const tbody = document.getElementById('batchResultTableBody');
+            if (!results || results.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center; color: var(--text-muted);">暂无结果</td></tr>';
+                return;
+            }
+
+            const fields = [
+                '姓名', '初领日期', '性别', '应复审日期', '作业类别',
+                '有效期开始日期', '操作项目', '有效期结束日期', '签发机关',
+                '实际复审日期', '复审单位'
+            ];
+
+            tbody.innerHTML = results.map(row => `
+                <tr>
+                    ${fields.map(f => `<td>${row[f] || '-'}</td>`).join('')}
+                </tr>
+            `).join('');
+        }
+
+        async function startBatchTask() {
+            if (isRunning) return;
+
+            const inputStr = document.getElementById('batch_people_input').value.trim();
+            if (!inputStr) {
+                showWarning('输入校验', '请输入人员信息 JSON 列表');
+                return;
+            }
+
+            try {
+                JSON.parse(inputStr); // 仅预校验 JSON 格式
+            } catch (e) {
+                showWarning('JSON 格式错误', e.message + '\n\n请参考样例:\n[{"name": "李世龙", "id_number": "130126..."}]');
+                return;
+            }
+
+            toggleBatchConfirmModal(); // 显示确定弹窗
+        }
+
+        async function confirmBatchStart() {
+            toggleBatchConfirmModal();
+
+            const inputStr = document.getElementById('batch_people_input').value.trim();
+            const people = JSON.parse(inputStr);
+
+            try {
+                const btn = document.getElementById('batchStartBtn');
+                btn.disabled = true;
+                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 批量处理中...';
+
+                setServerStatus('busy', '批量查询中');
+
+                const response = await fetch('/api/v1/query/batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ people })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to execute batch query');
+                }
+
+                const results = await response.json();
+
+                // Since this is a direct synchronous response, we process results immediately
+                updateBatchResultTable(results);
+                document.getElementById('showBatchResultBtn').style.display = 'flex';
+                document.getElementById('batchResultCount').innerText = results.length;
+                toggleBatchResultModal(true);
+
+                // UI feedback
+                btn.disabled = false;
+                btn.innerHTML = '<i class="ri-list-settings-line"></i> 通过 API 执行查询';
+                setServerStatus('active', '就绪');
+
+                document.getElementById('console').innerText += `查询完成，获取 ${results.length} 条记录。\n`;
+
+            } catch (e) {
+                alert('启动失败: ' + e.message);
+                document.getElementById('batchStartBtn').disabled = false;
+                document.getElementById('batchStartBtn').innerHTML = '<i class="ri-list-settings-line"></i> 执行批量手动查询';
+                setServerStatus('active', '错误');
+            }
+        }
+
+        function exportBatchToCSV() {
+            const tbody = document.getElementById('batchResultTableBody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            if (rows.length === 0 || rows[0].innerText.includes('暂无结果')) {
+                alert('没有数据可以导出');
+                return;
+            }
+
+            const fields = [
+                '姓名', '初领日期', '性别', '应复审日期', '作业类别',
+                '有效期开始日期', '操作项目', '有效期结束日期', '签发机关',
+                '实际复审日期', '复审单位'
+            ];
+
+            let csvContent = "\uFEFF"; // Add BOM for Excel compatibility
+            csvContent += fields.join(",") + "\n";
+
+            rows.forEach(row => {
+                const cols = Array.from(row.querySelectorAll('td')).map(td => `"${td.innerText.replace(/"/g, '""')}"`);
+                csvContent += cols.join(",") + "\n";
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `批量查询结果_${new Date().getTime()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+
+        // --- Shutdown Modal Logic ---
+        function toggleShutdownModal() {
+            const modal = document.getElementById('shutdownModal');
+            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        async function shutdownSystem() {
+            // Show custom modal instead of window.confirm
+            toggleShutdownModal();
+        }
+
+        async function confirmShutdown() {
+            toggleShutdownModal(); // Close modal
+
+            try {
+                // Find the original shutdown button (in header) for feedback
+                const btn = document.querySelector('button[onclick="shutdownSystem()"]');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 正在退出...';
+                }
+
+                await fetch('/api/shutdown', { method: 'POST' });
+
+                // UX feedback
+                setServerStatus('inactive', '已停止');
+                if (pollInterval) clearInterval(pollInterval);
+
+                document.body.innerHTML = `
+                    <div style="height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-body); color: var(--text-muted);">
+                        <i class="ri-shut-down-line" style="font-size: 4rem; margin-bottom: 1rem; color: var(--text-muted);"></i>
+                        <h2 style="color: var(--text-main);">系统已关闭</h2>
+                        <p>您可以关闭此浏览器窗口了。</p>
+                    </div>
+                `;
+            } catch (e) {
+                alert('退出失败: ' + e.message);
+                // Re-enable button if failed
+                const btn = document.querySelector('button[onclick="shutdownSystem()"]');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="ri-shut-down-line"></i> 退出系统';
+                }
+            }
+        }
+
+        // Init
+        loadConfig();
+        toggleCountInput();
+
+        // Initial poll to check if server is up / running something
+        pollStatus();
+        setInterval(() => {
+            if (!isRunning) pollStatus();
+        }, 3000);
+
+        // Update API hints with current location
+        const origin = window.location.origin;
+        document.getElementById('apiUrlHint').innerText = `${origin}/api/v1/query/batch`;
+        document.getElementById('hostHint').innerText = window.location.hostname;
+        document.querySelectorAll('.current-origin').forEach(el => el.innerText = origin);
+    </script>
+</body>
+
+</html>

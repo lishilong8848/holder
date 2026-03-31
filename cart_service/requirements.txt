@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+selenium
+ddddocr
+Pillow
+lark-oapi
+python-dotenv

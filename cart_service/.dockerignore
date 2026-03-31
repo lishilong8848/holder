@@ -1,0 +1,9 @@
+venv/
+output/
+outputs/
+chrome_cache/
+__pycache__/
+*.pyc
+.git/
+.idea/
+.DS_Store

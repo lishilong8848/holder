@@ -1,0 +1,47 @@
+{
+  "feishu": {
+    "app_id": "cli_a9d1c9fe9d381cee",
+    "app_secret": "PCZSOMI9ITqFWUkqT5TtQcVljP0Sx48y",
+    "app_token": "UdCTbp48hawoygswWaSc5y45nDe",
+    "table_id": "tblnzO9VIoS2dlLd"
+  },
+  "debug": true,
+  "field_mapping": {
+    "high_voltage": {
+      "expire_field": "高压证-到期日期",
+      "review_due_field": "高压证-应复审日期",
+      "review_actual_field": "高压证-实际复审日期",
+      "attachment_field": "高压证"
+    },
+    "low_voltage": {
+      "expire_field": "低压证-到期日期",
+      "review_due_field": "低压证-应复审日期",
+      "review_actual_field": "低压证-实际复审日期",
+      "attachment_field": "低压证"
+    },
+    "refrigeration": {
+      "expire_field": "制冷证-到期日期",
+      "review_due_field": "制冷证-应复审日期",
+      "review_actual_field": "制冷证-实际复审日期",
+      "attachment_field": "制冷证"
+    },
+    "working_at_height": {
+      "expire_field": "登高证-到期日期",
+      "review_due_field": "登高证-应复审日期",
+      "review_actual_field": "登高证-实际复审日期",
+      "attachment_field": "登高证"
+    }
+  },
+  "people": [
+    {
+      "record_id": "recuXM12hScY7A",
+      "name": "李世龙",
+      "id_number": "13012620001028361X"
+    },
+    {
+      "record_id": "recv07X3wlZvnV",
+      "name": "范邵桦",
+      "id_number": "320601199203020330"
+    }
+  ]
+}
