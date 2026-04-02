@@ -57,7 +57,7 @@ REQUEST_COORDINATOR = BatchRequestCoordinator(
     queue_timeout_seconds=QUEUE_TIMEOUT_SECONDS,
 )
 
-app = FastAPI(title="Certificate Query Writeback API", version="4.0.0")
+app = FastAPI(title="证书查询回填接口", version="4.0.0")
 
 
 class FeishuConfigRequest(BaseModel):
@@ -98,7 +98,6 @@ class BatchQueryRequest(BaseModel):
     field_mapping: FieldMappingRequest
     people: List[PersonRequest]
     concurrency: Optional[int] = None
-    debug: bool = False
 
 
 class ResultItem(BaseModel):
@@ -136,7 +135,7 @@ def normalize_feishu_config(config: FeishuConfigRequest) -> Dict[str, str]:
         if not value:
             env_value = os.environ.get(f"FEISHU_{key.upper()}", "").strip()
             if not env_value:
-                raise HTTPException(status_code=400, detail=f"feishu.{key} cannot be empty")
+                raise HTTPException(status_code=400, detail=f"feishu.{key} 不能为空")
             value = env_value
         normalized[key] = value
     return normalized
@@ -153,12 +152,12 @@ def normalize_field_mapping(field_mapping: FieldMappingRequest) -> Dict[str, Dic
         for field_name in ("expire_field", "review_due_field", "review_actual_field", "attachment_field"):
             value = getattr(mapping, field_name).strip()
             if not value:
-                raise HTTPException(status_code=400, detail=f"field_mapping.{cert_type}.{field_name} cannot be empty")
+                raise HTTPException(status_code=400, detail=f"field_mapping.{cert_type}.{field_name} 不能为空")
             clean_mapping[field_name] = value
         normalized[cert_type] = clean_mapping
 
     if not normalized:
-        raise HTTPException(status_code=400, detail="field_mapping must contain at least one certificate type")
+        raise HTTPException(status_code=400, detail="field_mapping 至少需要配置一种证书类型")
     return normalized
 
 
@@ -168,7 +167,7 @@ def normalize_lookup(lookup: Optional[LookupRequest]) -> Optional[Dict[str, Opti
 
     id_number_field = lookup.id_number_field.strip()
     if not id_number_field:
-        raise HTTPException(status_code=400, detail="lookup.id_number_field cannot be empty")
+        raise HTTPException(status_code=400, detail="lookup.id_number_field 不能为空")
 
     name_field = None
     if lookup.name_field is not None:
@@ -182,9 +181,9 @@ def normalize_lookup(lookup: Optional[LookupRequest]) -> Optional[Dict[str, Opti
 
 def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
     if not people:
-        raise HTTPException(status_code=400, detail="people cannot be empty")
+        raise HTTPException(status_code=400, detail="people 不能为空")
     if len(people) > MAX_BATCH_SIZE:
-        raise HTTPException(status_code=400, detail=f"people supports at most {MAX_BATCH_SIZE} entries")
+        raise HTTPException(status_code=400, detail=f"people 最多支持 {MAX_BATCH_SIZE} 条")
 
     normalized_people: List[Dict[str, str]] = []
     for index, person in enumerate(people, start=1):
@@ -192,9 +191,9 @@ def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
         name = person.name.strip()
         id_number = person.id_number.strip()
         if not name:
-            raise HTTPException(status_code=400, detail=f"people[{index}].name cannot be empty")
+            raise HTTPException(status_code=400, detail=f"people[{index}].name 不能为空")
         if not id_number:
-            raise HTTPException(status_code=400, detail=f"people[{index}].id_number cannot be empty")
+            raise HTTPException(status_code=400, detail=f"people[{index}].id_number 不能为空")
         normalized_people.append(
             {
                 "record_id": record_id,
@@ -233,10 +232,10 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
     field_mapping = normalize_field_mapping(payload.field_mapping)
     people = normalize_people(payload.people)
     if any(not person["record_id"] for person in people) and lookup is None:
-        raise HTTPException(status_code=400, detail="lookup is required when people[].record_id is omitted")
+        raise HTTPException(status_code=400, detail="未传入 people[].record_id 时，必须提供 lookup 配置")
 
     if payload.concurrency is not None:
-        logger.warning("request %s sent deprecated concurrency=%s; ignoring it", request_id, payload.concurrency)
+        logger.warning("请求 %s 传入了已废弃的 concurrency=%s，系统将忽略该参数", request_id, payload.concurrency)
 
     service = CertificateService(
         feishu_config=feishu_config,
@@ -253,7 +252,7 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
                 people=people,
                 lookup=lookup,
                 field_mapping=field_mapping,
-                debug=payload.debug,
+                debug=True,
             ),
             is_disconnected=request.is_disconnected,
         )
@@ -262,17 +261,17 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
     except QueueTimeoutError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ClientDisconnectedError:
-        logger.info("request %s disconnected before execution started", request_id)
-        raise HTTPException(status_code=499, detail="client disconnected before execution")
+        logger.info("请求 %s 在开始执行前已断开连接", request_id)
+        raise HTTPException(status_code=499, detail="客户端在任务开始执行前已断开连接")
     except RuntimeError as exc:
-        logger.error("request %s failed due to service runtime error: %s", request_id, exc, exc_info=True)
+        logger.error("请求 %s 因服务运行时错误失败：%s", request_id, exc, exc_info=True)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("request %s failed unexpectedly: %s", request_id, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"batch query failed: {exc}") from exc
+        logger.error("请求 %s 发生未预期错误：%s", request_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批量查询失败：{exc}") from exc
 
     logger.info(
-        "request %s finished total=%s success=%s failed=%s queued=%.2fs executed=%.2fs",
+        "请求 %s 已完成：总数=%s 成功=%s 失败=%s 排队耗时=%.2f 秒 执行耗时=%.2f 秒",
         request_id,
         queued_result.result.total,
         queued_result.result.success,

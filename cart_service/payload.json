@@ -6,43 +6,42 @@
     "table_id": "tbl_xxx"
   },
   "lookup": {
-    "id_number_field": "ID Number",
-    "name_field": "Name"
+    "id_number_field": "身份证号",
+    "name_field": "姓名"
   },
-  "debug": true,
   "field_mapping": {
     "high_voltage": {
-      "expire_field": "High Voltage Expire Date",
-      "review_due_field": "High Voltage Review Due",
-      "review_actual_field": "High Voltage Review Actual",
-      "attachment_field": "High Voltage Attachment"
+      "expire_field": "高压证-到期日期",
+      "review_due_field": "高压证-应复审日期",
+      "review_actual_field": "高压证-实际复审日期",
+      "attachment_field": "高压证"
     },
     "low_voltage": {
-      "expire_field": "Low Voltage Expire Date",
-      "review_due_field": "Low Voltage Review Due",
-      "review_actual_field": "Low Voltage Review Actual",
-      "attachment_field": "Low Voltage Attachment"
+      "expire_field": "低压证-到期日期",
+      "review_due_field": "低压证-应复审日期",
+      "review_actual_field": "低压证-实际复审日期",
+      "attachment_field": "低压证"
     },
     "refrigeration": {
-      "expire_field": "Refrigeration Expire Date",
-      "review_due_field": "Refrigeration Review Due",
-      "review_actual_field": "Refrigeration Review Actual",
-      "attachment_field": "Refrigeration Attachment"
+      "expire_field": "制冷证-到期日期",
+      "review_due_field": "制冷证-应复审日期",
+      "review_actual_field": "制冷证-实际复审日期",
+      "attachment_field": "制冷证"
     },
     "working_at_height": {
-      "expire_field": "Height Work Expire Date",
-      "review_due_field": "Height Work Review Due",
-      "review_actual_field": "Height Work Review Actual",
-      "attachment_field": "Height Work Attachment"
+      "expire_field": "登高证-到期日期",
+      "review_due_field": "登高证-应复审日期",
+      "review_actual_field": "登高证-实际复审日期",
+      "attachment_field": "登高证"
     }
   },
   "people": [
     {
-      "name": "Alice",
-      "id_number": "110101199001011234"
+      "name": "李世龙",
+      "id_number": "13012620001028361X"
     },
     {
-      "name": "Bob",
+      "name": "范邵桦",
       "id_number": "320601199203020330"
     }
   ]

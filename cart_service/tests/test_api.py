@@ -50,21 +50,21 @@ class BatchApiTests(unittest.TestCase):
         payload["people"] = []
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "people cannot be empty")
+        self.assertEqual(response.json()["detail"], "people 不能为空")
 
     def test_missing_lookup_returns_400_when_record_id_is_omitted(self):
         payload = self.build_payload()
         payload["lookup"] = None
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "lookup is required when people[].record_id is omitted")
+        self.assertEqual(response.json()["detail"], "未传入 people[].record_id 时，必须提供 lookup 配置")
 
     def test_blank_lookup_id_number_field_returns_400(self):
         payload = self.build_payload()
         payload["lookup"]["id_number_field"] = "   "
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "lookup.id_number_field cannot be empty")
+        self.assertEqual(response.json()["detail"], "lookup.id_number_field 不能为空")
 
     def test_explicit_record_id_does_not_require_lookup(self):
         payload = self.build_payload()
@@ -82,6 +82,7 @@ class BatchApiTests(unittest.TestCase):
                         id_number="13012620001028361X",
                         record_id="rec_001",
                         success=True,
+                        query_status="查询成功",
                     )
                 ],
                 query_seconds=0.5,
@@ -95,13 +96,14 @@ class BatchApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["results"][0]["record_id"], "rec_001")
+        self.assertEqual(response.json()["results"][0]["query_status"], "查询成功")
 
     def test_blank_name_returns_400(self):
         payload = self.build_payload()
         payload["people"][0]["name"] = "   "
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "people[1].name cannot be empty")
+        self.assertEqual(response.json()["detail"], "people[1].name 不能为空")
 
     def test_batch_over_limit_returns_400(self):
         payload = self.build_payload()
@@ -114,14 +116,14 @@ class BatchApiTests(unittest.TestCase):
         ]
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "people supports at most 20 entries")
+        self.assertEqual(response.json()["detail"], "people 最多支持 20 条")
 
     def test_empty_field_mapping_returns_400(self):
         payload = self.build_payload()
         payload["field_mapping"] = {}
         response = self.client.post("/api/v1/query/batch", json=payload)
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "field_mapping must contain at least one certificate type")
+        self.assertEqual(response.json()["detail"], "field_mapping 至少需要配置一种证书类型")
 
     def test_queue_full_returns_429(self):
         payload = self.build_payload()
@@ -158,6 +160,7 @@ class BatchApiTests(unittest.TestCase):
                         id_number="13012620001028361X",
                         record_id="rec_001",
                         success=True,
+                        query_status="查询成功",
                     )
                 ],
                 query_seconds=1.0,
@@ -182,14 +185,14 @@ class BatchApiTests(unittest.TestCase):
                         "id_number": "13012620001028361X",
                         "record_id": "rec_001",
                         "success": True,
+                        "query_status": "查询成功",
                     }
                 ],
             },
         )
 
-    def test_debug_mode_keeps_query_and_writeback_errors(self):
+    def test_response_always_keeps_query_and_writeback_errors(self):
         payload = self.build_payload()
-        payload["debug"] = True
         queued_result = QueuedRunResult(
             result=BatchProcessResult(
                 total=2,
@@ -201,15 +204,15 @@ class BatchApiTests(unittest.TestCase):
                         id_number="13012620001028361X",
                         record_id="rec_001",
                         success=True,
-                        query_status="success",
+                        query_status="查询成功",
                     ),
                     BatchPersonResult(
                         name="Fan Shaohua",
                         id_number="320601199203020330",
                         success=False,
-                        query_status="fail_no_data",
-                        query_error="no data",
-                        writeback_error="query skipped",
+                        query_status="未查询到证件信息",
+                        query_error="没有查询到相关证件信息",
+                        writeback_error="查询未成功，跳过回填",
                     ),
                 ],
                 query_seconds=1.0,
@@ -230,15 +233,15 @@ class BatchApiTests(unittest.TestCase):
                     "id_number": "13012620001028361X",
                     "record_id": "rec_001",
                     "success": True,
-                    "query_status": "success",
+                    "query_status": "查询成功",
                 },
                 {
                     "name": "Fan Shaohua",
                     "id_number": "320601199203020330",
                     "success": False,
-                    "query_status": "fail_no_data",
-                    "query_error": "no data",
-                    "writeback_error": "query skipped",
+                    "query_status": "未查询到证件信息",
+                    "query_error": "没有查询到相关证件信息",
+                    "writeback_error": "查询未成功，跳过回填",
                 },
             ],
         )

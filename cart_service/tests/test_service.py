@@ -362,7 +362,7 @@ class CertificateServiceTests(unittest.TestCase):
         self.assertEqual(result.total, 1)
         self.assertEqual(result.success, 0)
         self.assertEqual(result.failed, 1)
-        self.assertEqual(result.results[0].query_status, "fail_no_data")
+        self.assertEqual(result.results[0].query_status, "未查询到证件信息")
         self.assertEqual(result.results[0].writeback_error, SKIPPED_WRITEBACK_MESSAGE)
         fake_feishu.update_record.assert_not_called()
 
@@ -387,7 +387,7 @@ class CertificateServiceTests(unittest.TestCase):
 
         self.assertEqual(result.success, 0)
         self.assertEqual(result.failed, 1)
-        self.assertEqual(result.results[0].query_status, "success")
+        self.assertEqual(result.results[0].query_status, "查询成功")
         self.assertEqual(result.results[0].writeback_error, "upload failed")
 
     def test_process_batch_request_fails_when_lookup_finds_no_record(self):

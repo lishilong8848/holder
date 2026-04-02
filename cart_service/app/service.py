@@ -19,24 +19,37 @@ logger = logging.getLogger(__name__)
 REVIEW_DUE_FIELD = "\u5e94\u590d\u5ba1\u65e5\u671f"
 REVIEW_ACTUAL_FIELD = "\u5b9e\u9645\u590d\u5ba1\u65e5\u671f"
 SKIPPED_WRITEBACK_MESSAGE = "\u67e5\u8be2\u672a\u6210\u529f\uff0c\u8df3\u8fc7\u56de\u586b"
-WRITEBACK_FAILED_MESSAGE = "\u98de\u4e66\u63a5\u53e3\u66f4\u65b0\u5931\u8d25"
-LOOKUP_REQUIRED_MESSAGE = "lookup is required when people[].record_id is omitted"
-LOOKUP_NOT_FOUND_MESSAGE = "Feishu record not found"
-LOOKUP_MULTIPLE_MESSAGE = "multiple Feishu records matched"
+WRITEBACK_FAILED_MESSAGE = "\u98de\u4e66\u8bb0\u5f55\u66f4\u65b0\u5931\u8d25"
+LOOKUP_REQUIRED_MESSAGE = "\u672a\u4f20\u5165 people[].record_id \u65f6\uff0c\u5fc5\u987b\u63d0\u4f9b lookup \u914d\u7f6e"
+LOOKUP_NOT_FOUND_MESSAGE = "\u672a\u5728\u591a\u7ef4\u8868\u4e2d\u627e\u5230\u5339\u914d\u8bb0\u5f55"
+LOOKUP_MULTIPLE_MESSAGE = "\u5728\u591a\u7ef4\u8868\u4e2d\u5339\u914d\u5230\u4e86\u591a\u6761\u8bb0\u5f55"
+
+QUERY_STATUS_LABELS = {
+    "success": "\u67e5\u8be2\u6210\u529f",
+    "fail_id": "\u8bc1\u4ef6\u53f7\u6709\u8bef",
+    "fail_no_data": "\u672a\u67e5\u8be2\u5230\u8bc1\u4ef6\u4fe1\u606f",
+    "fail_other": "\u67e5\u8be2\u5931\u8d25",
+}
+CERTIFICATE_TYPE_LABELS = {
+    "high_voltage": "\u9ad8\u538b\u8bc1",
+    "low_voltage": "\u4f4e\u538b\u8bc1",
+    "refrigeration": "\u5236\u51b7\u8bc1",
+    "working_at_height": "\u767b\u9ad8\u8bc1",
+}
 
 T = TypeVar("T")
 
 
 class QueueFullError(RuntimeError):
-    """Raised when the in-memory request queue is already full."""
+    """内存中的请求队列已满。"""
 
 
 class QueueTimeoutError(RuntimeError):
-    """Raised when a request waits in queue for too long."""
+    """请求在队列中等待超时。"""
 
 
 class ClientDisconnectedError(RuntimeError):
-    """Raised when the client disconnects before execution starts."""
+    """客户端在执行开始前断开连接。"""
 
 
 @dataclass
@@ -68,7 +81,7 @@ class BatchProcessResult:
 
 
 class BatchRequestCoordinator:
-    """A single-slot FIFO coordinator for batch requests within one process."""
+    """单进程内的单执行槽 FIFO 批量请求协调器。"""
 
     def __init__(self, *, max_queue_size: int, queue_timeout_seconds: int):
         self.max_queue_size = max_queue_size
@@ -86,7 +99,7 @@ class BatchRequestCoordinator:
     ) -> QueuedRunResult[T]:
         enqueued_at = time.perf_counter()
         queue_position = await self._enqueue(request_id)
-        logger.info("request %s enqueued position=%s", request_id, queue_position)
+        logger.info("请求 %s 已进入队列，当前位置=%s", request_id, queue_position)
 
         queued_seconds = await self._wait_for_turn(
             request_id=request_id,
@@ -94,12 +107,12 @@ class BatchRequestCoordinator:
             is_disconnected=is_disconnected,
         )
 
-        logger.info("request %s started after %.2fs in queue", request_id, queued_seconds)
+        logger.info("请求 %s 排队 %.2f 秒后开始执行", request_id, queued_seconds)
         execution_started = time.perf_counter()
         try:
             result = await work()
             execution_seconds = time.perf_counter() - execution_started
-            logger.info("request %s finished execution in %.2fs", request_id, execution_seconds)
+            logger.info("请求 %s 执行完成，耗时 %.2f 秒", request_id, execution_seconds)
             return QueuedRunResult(
                 result=result,
                 queued_seconds=queued_seconds,
@@ -165,7 +178,7 @@ class BatchRequestCoordinator:
 
 
 class CertificateService:
-    """Owns the query + Feishu writeback orchestration for one batch request."""
+    """负责单个批次请求的查询与飞书回填编排。"""
 
     def __init__(
         self,
@@ -199,7 +212,7 @@ class CertificateService:
                 lookup_index = self.build_lookup_index(records=lookup_records, lookup=lookup)
             except Exception as exc:  # pragma: no cover - network failures handled at runtime
                 lookup_error = str(exc)
-                logger.error("request %s failed to preload Feishu lookup records: %s", request_id, exc)
+                logger.error("请求 %s 预加载飞书匹配记录失败：%s", request_id, exc)
 
         query_started = time.perf_counter()
         with CertificateQuery(
@@ -208,7 +221,7 @@ class CertificateService:
         ) as query:
             query_results = query.run_batch_query(people)
         query_seconds = time.perf_counter() - query_started
-        logger.info("request %s query phase finished in %.2fs", request_id, query_seconds)
+        logger.info("请求 %s 查询阶段完成，耗时 %.2f 秒", request_id, query_seconds)
 
         writeback_started = time.perf_counter()
         response_results: List[BatchPersonResult] = []
@@ -231,22 +244,22 @@ class CertificateService:
                     id_number=result.id_number,
                     success=person_success,
                     record_id=resolved_record_id,
-                    query_status=result.status if debug else None,
+                    query_status=self.to_public_query_status(result.status) if debug else None,
                     query_error=result.error if debug else None,
                     writeback_error=writeback_error if debug else None,
                 )
             )
             logger.info(
-                "request %s person=%s record=%s query_status=%s writeback_success=%s",
+                "请求 %s 人员=%s 记录=%s 查询状态=%s 回填成功=%s",
                 request_id,
                 result.name,
-                resolved_record_id or "<lookup>",
-                result.status,
+                resolved_record_id or "<待匹配>",
+                self.to_public_query_status(result.status),
                 person_success,
             )
 
         writeback_seconds = time.perf_counter() - writeback_started
-        logger.info("request %s writeback phase finished in %.2fs", request_id, writeback_seconds)
+        logger.info("请求 %s 回填阶段完成，耗时 %.2f 秒", request_id, writeback_seconds)
 
         failed_count = len(response_results) - success_count
         return BatchProcessResult(
@@ -323,6 +336,10 @@ class CertificateService:
             return None, LOOKUP_MULTIPLE_MESSAGE
         return matches[0], None
 
+    @staticmethod
+    def to_public_query_status(status: str) -> str:
+        return QUERY_STATUS_LABELS.get(status, status)
+
     def build_feishu_fields(
         self,
         *,
@@ -353,7 +370,8 @@ class CertificateService:
                 fields[mapping["review_actual_field"]] = review_actual_timestamp
 
             if not card.screenshot_bytes:
-                raise RuntimeError(f"{cert_type} screenshot is missing")
+                cert_label = CERTIFICATE_TYPE_LABELS.get(cert_type, cert_type)
+                raise RuntimeError(f"{cert_label}截图缺失，无法上传附件")
 
             filename = self.build_certificate_filename(
                 result=result,
@@ -389,10 +407,11 @@ class CertificateService:
         cert_type: str,
         card: ExtractedCertificateCard,
     ) -> str:
-        expire_text = (card.fields.get(EFFECTIVE_END_FIELD) or "").strip() or "unknown"
-        raw_reference = record_reference or result.record_id or result.id_number or result.name or "unknown"
+        expire_text = (card.fields.get(EFFECTIVE_END_FIELD) or "").strip() or "\u672a\u77e5\u65e5\u671f"
+        raw_reference = record_reference or result.record_id or result.id_number or result.name or "\u672a\u77e5\u6807\u8bc6"
         safe_reference = raw_reference.replace("/", "_").replace("\\", "_").replace(" ", "_")
-        return f"{safe_reference}_{cert_type}_{expire_text}.jpg"
+        cert_label = CERTIFICATE_TYPE_LABELS.get(cert_type, cert_type)
+        return f"{safe_reference}_{cert_label}_{expire_text}.jpg"
 
     @staticmethod
     def lookup_field_names(lookup: Dict[str, Optional[str]]) -> List[str]:

@@ -27,7 +27,7 @@ BITABLE_OBJ_TYPE = "bitable"
 
 
 class FeishuTableReader:
-    """Minimal Feishu bitable client for token refresh, media upload, and record update."""
+    """精简版飞书多维表客户端，负责刷新 token、上传图片和更新记录。"""
 
     def __init__(self, app_id: str, app_secret: str, app_token: str, table_id: str):
         self.app_id = app_id
@@ -60,13 +60,13 @@ class FeishuTableReader:
         )
         response = self.client.auth.v3.tenant_access_token.internal(request)
         if not response.success():
-            raise RuntimeError(f"failed to obtain Feishu tenant_access_token: {response.code} - {response.msg}")
+            raise RuntimeError(f"获取飞书 tenant_access_token 失败：{response.code} - {response.msg}")
 
         payload = json.loads(response.raw.content)
         self.tenant_token = payload["tenant_access_token"]
         expire_in = payload.get("expire", 7200)
         self.token_expire_time = int(time.time()) + expire_in - 300
-        logger.info("refreshed Feishu tenant token successfully")
+        logger.info("飞书 tenant_access_token 刷新成功")
         return self.tenant_token
 
     def ensure_token(self) -> str:
@@ -100,7 +100,7 @@ class FeishuTableReader:
 
         if response.success() and resolved_token:
             if resolved_obj_type and resolved_obj_type != BITABLE_OBJ_TYPE:
-                raise RuntimeError(f"wiki token does not point to a bitable object: {resolved_obj_type}")
+                raise RuntimeError(f"wiki token 指向的对象不是多维表：{resolved_obj_type}")
             self._resolved_app_token = resolved_token
             self.app_token = resolved_token
             return resolved_token
@@ -111,7 +111,7 @@ class FeishuTableReader:
 
     def upload_image(self, filename: str, content: bytes) -> str:
         if not content:
-            raise RuntimeError("failed to upload Feishu attachment: image content is empty")
+            raise RuntimeError("上传飞书附件失败：图片内容为空")
 
         request = (
             UploadAllMediaRequest.builder()
@@ -130,7 +130,7 @@ class FeishuTableReader:
         response = self.client.drive.v1.media.upload_all(request, self._request_option())
         file_token = getattr(getattr(response, "data", None), "file_token", None)
         if not response.success() or not file_token:
-            raise RuntimeError(f"failed to upload Feishu attachment: {response.code} - {response.msg}")
+            raise RuntimeError(f"上传飞书附件失败：{response.code} - {response.msg}")
         return file_token
 
     def list_records(self, *, field_names: Optional[List[str]] = None, page_size: int = 500) -> List[AppTableRecord]:
@@ -139,7 +139,7 @@ class FeishuTableReader:
         except RuntimeError:
             if not field_names:
                 raise
-            logger.warning("failed to list Feishu records with field_names filter; retrying without field_names")
+            logger.warning("按字段过滤拉取飞书记录失败，将自动重试全量拉取")
             return self._list_records(field_names=None, page_size=page_size)
 
     def _list_records(self, *, field_names: Optional[List[str]], page_size: int) -> List[AppTableRecord]:
@@ -162,7 +162,7 @@ class FeishuTableReader:
             request = builder.build()
             response = self.client.bitable.v1.app_table_record.list(request, self._request_option())
             if not response.success():
-                raise RuntimeError(f"failed to list Feishu records: {response.code} - {response.msg}")
+                raise RuntimeError(f"拉取飞书记录失败：{response.code} - {response.msg}")
 
             data = getattr(response, "data", None)
             records.extend(list(getattr(data, "items", None) or []))
