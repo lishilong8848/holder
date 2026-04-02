@@ -92,7 +92,7 @@ Content-Type: application/json
   "people": [
     {
       "name": "李世龙",
-      "id_number": "13012620001028361X"
+      "id_number": "130126200000000"
     }
   ]
 }
@@ -115,7 +115,7 @@ Content-Type: application/json
   "results": [
     {
       "name": "李世龙",
-      "id_number": "13012620001028361X",
+      "id_number": "130126200000000",
       "record_id": "rec_xxx",
       "success": true
     }
@@ -133,14 +133,14 @@ Content-Type: application/json
   "results": [
     {
       "name": "李世龙",
-      "id_number": "13012620001028361X",
+      "id_number": "130126200000000",
       "record_id": "rec_xxx",
       "success": true,
       "query_status": "查询成功"
     },
     {
       "name": "范邵桦",
-      "id_number": "320601199203020330",
+      "id_number": "320601199203000000",
       "success": false,
       "query_status": "未查询到证件信息",
       "query_error": "没有查询到相关证件信息",
