@@ -1,46 +1,48 @@
 {
   "feishu": {
-    "app_id": "cli_a9d1c9fe9d381cee",
-    "app_secret": "PCZSOMI9ITqFWUkqT5TtQcVljP0Sx48y",
-    "app_token": "UdCTbp48hawoygswWaSc5y45nDe",
-    "table_id": "tblnzO9VIoS2dlLd"
+    "app_id": "cli_xxx",
+    "app_secret": "secret_xxx",
+    "app_token": "base_or_wiki_xxx",
+    "table_id": "tbl_xxx"
+  },
+  "lookup": {
+    "id_number_field": "ID Number",
+    "name_field": "Name"
   },
   "debug": true,
   "field_mapping": {
     "high_voltage": {
-      "expire_field": "高压证-到期日期",
-      "review_due_field": "高压证-应复审日期",
-      "review_actual_field": "高压证-实际复审日期",
-      "attachment_field": "高压证"
+      "expire_field": "High Voltage Expire Date",
+      "review_due_field": "High Voltage Review Due",
+      "review_actual_field": "High Voltage Review Actual",
+      "attachment_field": "High Voltage Attachment"
     },
     "low_voltage": {
-      "expire_field": "低压证-到期日期",
-      "review_due_field": "低压证-应复审日期",
-      "review_actual_field": "低压证-实际复审日期",
-      "attachment_field": "低压证"
+      "expire_field": "Low Voltage Expire Date",
+      "review_due_field": "Low Voltage Review Due",
+      "review_actual_field": "Low Voltage Review Actual",
+      "attachment_field": "Low Voltage Attachment"
     },
     "refrigeration": {
-      "expire_field": "制冷证-到期日期",
-      "review_due_field": "制冷证-应复审日期",
-      "review_actual_field": "制冷证-实际复审日期",
-      "attachment_field": "制冷证"
+      "expire_field": "Refrigeration Expire Date",
+      "review_due_field": "Refrigeration Review Due",
+      "review_actual_field": "Refrigeration Review Actual",
+      "attachment_field": "Refrigeration Attachment"
     },
     "working_at_height": {
-      "expire_field": "登高证-到期日期",
-      "review_due_field": "登高证-应复审日期",
-      "review_actual_field": "登高证-实际复审日期",
-      "attachment_field": "登高证"
+      "expire_field": "Height Work Expire Date",
+      "review_due_field": "Height Work Review Due",
+      "review_actual_field": "Height Work Review Actual",
+      "attachment_field": "Height Work Attachment"
     }
   },
   "people": [
     {
-      "record_id": "recuXM12hScY7A",
-      "name": "李世龙",
-      "id_number": "13012620001028361X"
+      "name": "Alice",
+      "id_number": "110101199001011234"
     },
     {
-      "record_id": "recv07X3wlZvnV",
-      "name": "范邵桦",
+      "name": "Bob",
       "id_number": "320601199203020330"
     }
   ]

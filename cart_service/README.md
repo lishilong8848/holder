@@ -1,18 +1,19 @@
 # Certificate Query Writeback API
 
-同步查询应急管理部证书信息，并把结果直接回填到飞书多维表。
+This service queries emergency-management certificates from the target website and writes the selected fields back to a Feishu Bitable row.
 
-## Features
+## Runtime model
 
-- 仅保留 `GET /healthz` 和 `POST /api/v1/query/batch`
-- 单次最多查询 `20` 人，按输入顺序串行执行
-- 请求里显式传入飞书配置和字段映射
-- `feishu.app_token` 同时兼容 Base token 和 Wiki node token
-- 查询成功时回填证书到期日期、应复审日期、实际复审日期和证书截图附件字段
-- 接口响应只返回每个人是否端到端成功
-- 可选 `debug=true` 时，额外返回 `query_status`、`query_error`、`writeback_error`
+- Public APIs: `GET /healthz` and `POST /api/v1/query/batch`
+- Single process, single execution slot
+- Requests are handled in FIFO order through an in-memory queue
+- Only one batch runs at a time
+- `MAX_QUEUE_SIZE` controls queue capacity
+- `QUEUE_TIMEOUT_SECONDS` controls queue wait timeout
+- Batch size is capped at `20`
+- `concurrency` may still be sent by older callers, but the server ignores it
 
-## Run
+## Start
 
 ### Local
 
@@ -21,8 +22,6 @@ pip install -r requirements.txt
 python -m app.server
 ```
 
-默认监听端口 `58000`。
-
 ### Docker
 
 ```bash
@@ -30,15 +29,30 @@ docker build -t cert-service .
 docker run -d -p 58000:58000 --name cert-service cert-service
 ```
 
+The default port is `58000`.
+
+## Environment
+
+See [`.env.example`](./.env.example).
+
+Important variables:
+
+- `PORT`
+- `MAX_QUEUE_SIZE`
+- `QUEUE_TIMEOUT_SECONDS`
+- `CHROME_BIN`
+- `CHROMEDRIVER_PATH`
+- Optional default Feishu credentials via `FEISHU_*`
+
 ## API
 
-### Health Check
+### Health check
 
 ```http
 GET /healthz
 ```
 
-响应示例：
+Response:
 
 ```json
 {
@@ -46,54 +60,71 @@ GET /healthz
 }
 ```
 
-### Batch Query And Writeback
+### Batch query and writeback
 
 ```http
 POST /api/v1/query/batch
 Content-Type: application/json
 ```
 
-请求体：
+Request example:
 
 ```json
 {
   "feishu": {
     "app_id": "cli_xxx",
     "app_secret": "secret_xxx",
-    "app_token": "base_xxx 或 wiki_xxx",
+    "app_token": "base_or_wiki_xxx",
     "table_id": "tbl_xxx"
+  },
+  "lookup": {
+    "id_number_field": "ID Number",
+    "name_field": "Name"
   },
   "debug": true,
   "field_mapping": {
     "high_voltage": {
-      "expire_field": "高压证-到期日期",
-      "review_due_field": "高压证-应复审日期",
-      "review_actual_field": "高压证-实际复审日期",
-      "attachment_field": "高压证-截图"
-    },
-    "low_voltage": {
-      "expire_field": "低压证-到期日期",
-      "review_due_field": "低压证-应复审日期",
-      "review_actual_field": "低压证-实际复审日期",
-      "attachment_field": "低压证-截图"
+      "expire_field": "High Voltage Expire Date",
+      "review_due_field": "High Voltage Review Due",
+      "review_actual_field": "High Voltage Review Actual",
+      "attachment_field": "High Voltage Attachment"
     }
   },
   "people": [
     {
-      "record_id": "recxxxxxxxx",
-      "name": "李世龙",
-      "id_number": "13012620001028361X"
-    },
-    {
-      "record_id": "recyyyyyyyy",
-      "name": "测试错误ID",
-      "id_number": "123456"
+      "name": "Alice",
+      "id_number": "110101199001011234"
     }
   ]
 }
 ```
 
-响应体：
+`people[].record_id` is optional. If it is omitted, the server looks up the target row in Feishu by:
+
+- `lookup.id_number_field`
+- `lookup.name_field` when provided
+
+If no row matches, or more than one row matches, that person returns `success=false`.
+
+Success response:
+
+```json
+{
+  "total": 1,
+  "success": 1,
+  "failed": 0,
+  "results": [
+    {
+      "name": "Alice",
+      "id_number": "110101199001011234",
+      "record_id": "rec_xxx",
+      "success": true
+    }
+  ]
+}
+```
+
+Debug response example:
 
 ```json
 {
@@ -102,24 +133,38 @@ Content-Type: application/json
   "failed": 1,
   "results": [
     {
-      "record_id": "recxxxxxxxx",
+      "name": "Alice",
+      "id_number": "110101199001011234",
+      "record_id": "rec_xxx",
       "success": true,
       "query_status": "success"
     },
     {
-      "record_id": "recyyyyyyyy",
+      "name": "Bob",
+      "id_number": "320601199203020330",
       "success": false,
       "query_status": "fail_no_data",
-      "query_error": "没有查询到相关证件信息"
+      "query_error": "no data",
+      "writeback_error": "query skipped"
     }
   ]
 }
 ```
 
-## Validation
+## Validation and queue behavior
 
-- `people` 不能为空
-- 每条记录都必须提供非空的 `record_id`、`name`、`id_number`
-- `field_mapping` 至少要提供一个证书类型映射
-- 单次批量最多 `20` 人
-- `success=true` 表示“查询成功且飞书写回成功”，或该人查到的证书都不在本次传入的字段映射范围内
+- `people` cannot be empty
+- Each `people` item must include non-empty `name` and `id_number`
+- If any `people` item omits `record_id`, `lookup.id_number_field` is required
+- `field_mapping` must include at least one certificate type
+- Batch size limit is `20`
+- Queue full returns `429`
+- Queue wait timeout returns `503`
+- `success=true` means the certificate query succeeded and the Feishu record update succeeded
+
+## Manual smoke tools
+
+- Example payload: [`payload.json`](./payload.json)
+- Local private payload: `payload.local.json`
+- Manual API runner: [`tests/manual_batch_request.py`](./tests/manual_batch_request.py)
+- Manual Feishu token check: [`scripts/check_feishu_token.py`](./scripts/check_feishu_token.py)

@@ -1,47 +1,49 @@
+import asyncio
 import logging
 import os
-from pathlib import Path
 import sys
+import uuid
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-# 加载环境变量
 load_dotenv()
 
-# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 try:
-    from .certificate_query import (
-        EFFECTIVE_END_FIELD,
-        CertificateQuery,
-        ExtractedCertificateCard,
-        PersonQueryResult,
+    from .service import (
+        BatchPersonResult,
+        BatchRequestCoordinator,
+        CertificateService,
+        ClientDisconnectedError,
+        QueueFullError,
+        QueueTimeoutError,
     )
-    from .feishu_reader import FeishuTableReader
-    from .service import CertificateService
 except ImportError:
     project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-    from app.certificate_query import (
-        EFFECTIVE_END_FIELD,
-        CertificateQuery,
-        ExtractedCertificateCard,
-        PersonQueryResult,
+    from app.service import (
+        BatchPersonResult,
+        BatchRequestCoordinator,
+        CertificateService,
+        ClientDisconnectedError,
+        QueueFullError,
+        QueueTimeoutError,
     )
-    from app.feishu_reader import FeishuTableReader
-    from app.service import CertificateService
 
 
-MAX_BATCH_SIZE = 50  # 提升并发后的批量上限
-DEFAULT_CONCURRENCY = int(os.environ.get("DEFAULT_CONCURRENCY", 3))
+REQUEST_VALIDATION_DETAIL = "\u8bf7\u6c42\u53c2\u6570\u4e0d\u5408\u6cd5"
+MAX_BATCH_SIZE = 20
+MAX_QUEUE_SIZE = max(int(os.environ.get("MAX_QUEUE_SIZE", 10)), 1)
+QUEUE_TIMEOUT_SECONDS = max(int(os.environ.get("QUEUE_TIMEOUT_SECONDS", 600)), 1)
 
 SUPPORTED_CERT_TYPES = (
     "high_voltage",
@@ -50,7 +52,12 @@ SUPPORTED_CERT_TYPES = (
     "working_at_height",
 )
 
-app = FastAPI(title="证书批量查询回填 API (并发增强版)", version="3.1.0")
+REQUEST_COORDINATOR = BatchRequestCoordinator(
+    max_queue_size=MAX_QUEUE_SIZE,
+    queue_timeout_seconds=QUEUE_TIMEOUT_SECONDS,
+)
+
+app = FastAPI(title="Certificate Query Writeback API", version="4.0.0")
 
 
 class FeishuConfigRequest(BaseModel):
@@ -61,9 +68,14 @@ class FeishuConfigRequest(BaseModel):
 
 
 class PersonRequest(BaseModel):
-    record_id: str
+    record_id: Optional[str] = None
     name: str
     id_number: str
+
+
+class LookupRequest(BaseModel):
+    id_number_field: str
+    name_field: Optional[str] = None
 
 
 class CertificateFieldMappingRequest(BaseModel):
@@ -82,6 +94,7 @@ class FieldMappingRequest(BaseModel):
 
 class BatchQueryRequest(BaseModel):
     feishu: FeishuConfigRequest
+    lookup: Optional[LookupRequest] = None
     field_mapping: FieldMappingRequest
     people: List[PersonRequest]
     concurrency: Optional[int] = None
@@ -89,8 +102,10 @@ class BatchQueryRequest(BaseModel):
 
 
 class ResultItem(BaseModel):
-    record_id: str
+    name: str
+    id_number: str
     success: bool
+    record_id: Optional[str] = None
     query_status: Optional[str] = None
     query_error: Optional[str] = None
     writeback_error: Optional[str] = None
@@ -104,67 +119,82 @@ class BatchQueryResponse(BaseModel):
 
 
 @app.exception_handler(RequestValidationError)
-async def request_validation_exception_handler(_request, exc: RequestValidationError):
+async def request_validation_exception_handler(_request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=400,
         content={
-            "detail": "请求参数不合法",
+            "detail": REQUEST_VALIDATION_DETAIL,
             "errors": exc.errors(),
         },
     )
 
 
 def normalize_feishu_config(config: FeishuConfigRequest) -> Dict[str, str]:
-    normalized = {}
+    normalized: Dict[str, str] = {}
     for key in ("app_id", "app_secret", "app_token", "table_id"):
         value = getattr(config, key).strip()
         if not value:
-            # 允许从环境变量读取默认值
-            env_val = os.environ.get(f"FEISHU_{key.upper()}")
-            if env_val:
-                value = env_val
-            else:
-                raise HTTPException(status_code=400, detail=f"feishu.{key} 不能为空且未设置环境变量")
+            env_value = os.environ.get(f"FEISHU_{key.upper()}", "").strip()
+            if not env_value:
+                raise HTTPException(status_code=400, detail=f"feishu.{key} cannot be empty")
+            value = env_value
         normalized[key] = value
     return normalized
 
 
 def normalize_field_mapping(field_mapping: FieldMappingRequest) -> Dict[str, Dict[str, str]]:
     normalized: Dict[str, Dict[str, str]] = {}
-
     for cert_type in SUPPORTED_CERT_TYPES:
         mapping = getattr(field_mapping, cert_type)
         if mapping is None:
             continue
 
-        clean_mapping = {}
+        clean_mapping: Dict[str, str] = {}
         for field_name in ("expire_field", "review_due_field", "review_actual_field", "attachment_field"):
             value = getattr(mapping, field_name).strip()
             if not value:
-                raise HTTPException(status_code=400, detail=f"field_mapping.{cert_type}.{field_name} 不能为空")
+                raise HTTPException(status_code=400, detail=f"field_mapping.{cert_type}.{field_name} cannot be empty")
             clean_mapping[field_name] = value
         normalized[cert_type] = clean_mapping
 
     if not normalized:
-        raise HTTPException(status_code=400, detail="field_mapping 至少需要提供一个证书类型映射")
-
+        raise HTTPException(status_code=400, detail="field_mapping must contain at least one certificate type")
     return normalized
+
+
+def normalize_lookup(lookup: Optional[LookupRequest]) -> Optional[Dict[str, Optional[str]]]:
+    if lookup is None:
+        return None
+
+    id_number_field = lookup.id_number_field.strip()
+    if not id_number_field:
+        raise HTTPException(status_code=400, detail="lookup.id_number_field cannot be empty")
+
+    name_field = None
+    if lookup.name_field is not None:
+        name_field = lookup.name_field.strip() or None
+
+    return {
+        "id_number_field": id_number_field,
+        "name_field": name_field,
+    }
 
 
 def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
     if not people:
-        raise HTTPException(status_code=400, detail="people 不能为空")
-
+        raise HTTPException(status_code=400, detail="people cannot be empty")
     if len(people) > MAX_BATCH_SIZE:
-        raise HTTPException(status_code=400, detail=f"单次最多支持 {MAX_BATCH_SIZE} 人")
+        raise HTTPException(status_code=400, detail=f"people supports at most {MAX_BATCH_SIZE} entries")
 
     normalized_people: List[Dict[str, str]] = []
-    for person in people:
-        record_id = person.record_id.strip()
+    for index, person in enumerate(people, start=1):
+        record_id = (person.record_id or "").strip()
         name = person.name.strip()
         id_number = person.id_number.strip()
-        if not record_id or not name or not id_number:
-            continue
+        if not name:
+            raise HTTPException(status_code=400, detail=f"people[{index}].name cannot be empty")
+        if not id_number:
+            raise HTTPException(status_code=400, detail=f"people[{index}].id_number cannot be empty")
         normalized_people.append(
             {
                 "record_id": record_id,
@@ -175,80 +205,92 @@ def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
     return normalized_people
 
 
+def build_response(result_rows: List[BatchPersonResult]) -> List[ResultItem]:
+    return [
+        ResultItem(
+            name=row.name,
+            id_number=row.id_number,
+            success=row.success,
+            record_id=row.record_id,
+            query_status=row.query_status,
+            query_error=row.query_error,
+            writeback_error=row.writeback_error,
+        )
+        for row in result_rows
+    ]
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
 
 
 @app.post("/api/v1/query/batch", response_model=BatchQueryResponse, response_model_exclude_none=True)
-async def batch_query(request: BatchQueryRequest):
-    feishu_config = normalize_feishu_config(request.feishu)
-    field_mapping = normalize_field_mapping(request.field_mapping)
-    people = normalize_people(request.people)
-    
-    concurrency = request.concurrency or DEFAULT_CONCURRENCY
+async def batch_query(request: Request, payload: BatchQueryRequest):
+    request_id = uuid.uuid4().hex
+    feishu_config = normalize_feishu_config(payload.feishu)
+    lookup = normalize_lookup(payload.lookup)
+    field_mapping = normalize_field_mapping(payload.field_mapping)
+    people = normalize_people(payload.people)
+    if any(not person["record_id"] for person in people) and lookup is None:
+        raise HTTPException(status_code=400, detail="lookup is required when people[].record_id is omitted")
 
-    # 初始化服务层
+    if payload.concurrency is not None:
+        logger.warning("request %s sent deprecated concurrency=%s; ignoring it", request_id, payload.concurrency)
+
     service = CertificateService(
         feishu_config=feishu_config,
-        max_workers=concurrency,
         chrome_bin=os.environ.get("CHROME_BIN"),
-        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH")
+        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
     )
 
-    # 1. 并发查询
     try:
-        query_results = service.run_batch(people=people)
-    except Exception as exc:
-        logger.error(f"批量查询引擎故障: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"批量查询引擎故障: {exc}")
-
-    # 2. 批量回填
-    response_results: List[ResultItem] = []
-    success_count = 0
-    
-    for result in query_results:
-        writeback_error: Optional[str] = None
-        person_success = False
-        
-        if result.status == "success":
-            try:
-                # 构造回填字段并执行更新
-                fields = service._build_feishu_fields(result, field_mapping)
-                if service.feishu_client.update_record(result.record_id, fields):
-                    person_success = True
-                else:
-                    writeback_error = "飞书接口更新失败"
-            except Exception as e:
-                logger.warning(f"记录 {result.record_id} 回填异常: {e}")
-                writeback_error = str(e)
-        else:
-            writeback_error = "查询未成功，跳过回填"
-
-        if person_success:
-            success_count += 1
-
-        item = ResultItem(
-            record_id=result.record_id,
-            success=person_success,
+        queued_result = await REQUEST_COORDINATOR.run(
+            request_id=request_id,
+            work=lambda: asyncio.to_thread(
+                service.process_batch_request,
+                request_id=request_id,
+                people=people,
+                lookup=lookup,
+                field_mapping=field_mapping,
+                debug=payload.debug,
+            ),
+            is_disconnected=request.is_disconnected,
         )
-        if request.debug:
-            item.query_status = result.status
-            item.query_error = result.error
-            item.writeback_error = writeback_error
-            
-        response_results.append(item)
+    except QueueFullError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except QueueTimeoutError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ClientDisconnectedError:
+        logger.info("request %s disconnected before execution started", request_id)
+        raise HTTPException(status_code=499, detail="client disconnected before execution")
+    except RuntimeError as exc:
+        logger.error("request %s failed due to service runtime error: %s", request_id, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("request %s failed unexpectedly: %s", request_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"batch query failed: {exc}") from exc
 
-    failed_count = len(response_results) - success_count
+    logger.info(
+        "request %s finished total=%s success=%s failed=%s queued=%.2fs executed=%.2fs",
+        request_id,
+        queued_result.result.total,
+        queued_result.result.success,
+        queued_result.result.failed,
+        queued_result.queued_seconds,
+        queued_result.execution_seconds,
+    )
+
     return BatchQueryResponse(
-        total=len(response_results),
-        success=success_count,
-        failed=failed_count,
-        results=response_results,
+        total=queued_result.result.total,
+        success=queued_result.result.success,
+        failed=queued_result.result.failed,
+        results=build_response(queued_result.result.results),
     )
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("PORT", 58000))
     uvicorn.run(app, host="0.0.0.0", port=port)

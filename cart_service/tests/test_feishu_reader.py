@@ -9,6 +9,7 @@ class FeishuReaderUnitTests(unittest.TestCase):
         reader = FeishuTableReader.__new__(FeishuTableReader)
         reader.raw_app_token = "base_xxx"
         reader.app_token = "base_xxx"
+        reader.table_id = "tbl_xxx"
         reader._resolved_app_token = None
         reader.tenant_token = "tenant-token"
         reader.client = MagicMock()
@@ -57,6 +58,57 @@ class FeishuReaderUnitTests(unittest.TestCase):
         reader = self._build_reader_without_init()
         self.assertTrue(reader.update_record("rec_001", {}))
         reader.client.bitable.v1.app_table_record.update.assert_not_called()
+
+    def test_list_records_uses_field_names_and_collects_all_pages(self):
+        reader = self._build_reader_without_init()
+        reader.resolve_app_token = Mock(return_value="base_xxx")
+
+        first_response = MagicMock()
+        first_response.success.return_value = True
+        first_response.data.items = [MagicMock(record_id="rec_1", fields={"Name": "Alice"})]
+        first_response.data.has_more = True
+        first_response.data.page_token = "next-page"
+
+        second_response = MagicMock()
+        second_response.success.return_value = True
+        second_response.data.items = [MagicMock(record_id="rec_2", fields={"Name": "Bob"})]
+        second_response.data.has_more = False
+        second_response.data.page_token = None
+
+        reader.client.bitable.v1.app_table_record.list.side_effect = [first_response, second_response]
+
+        records = reader.list_records(field_names=["Name", "ID Number"])
+
+        self.assertEqual(len(records), 2)
+        first_request = reader.client.bitable.v1.app_table_record.list.call_args_list[0][0][0]
+        second_request = reader.client.bitable.v1.app_table_record.list.call_args_list[1][0][0]
+        self.assertEqual(first_request.field_names, "[\"Name\", \"ID Number\"]")
+        self.assertEqual(second_request.page_token, "next-page")
+
+    def test_list_records_retries_without_field_names_when_filtered_request_fails(self):
+        reader = self._build_reader_without_init()
+        reader.resolve_app_token = Mock(return_value="base_xxx")
+
+        failed_response = MagicMock()
+        failed_response.success.return_value = False
+        failed_response.code = 500
+        failed_response.msg = "bad field_names"
+
+        success_response = MagicMock()
+        success_response.success.return_value = True
+        success_response.data.items = []
+        success_response.data.has_more = False
+        success_response.data.page_token = None
+
+        reader.client.bitable.v1.app_table_record.list.side_effect = [failed_response, success_response]
+
+        records = reader.list_records(field_names=["Name"])
+
+        self.assertEqual(records, [])
+        first_request = reader.client.bitable.v1.app_table_record.list.call_args_list[0][0][0]
+        second_request = reader.client.bitable.v1.app_table_record.list.call_args_list[1][0][0]
+        self.assertEqual(first_request.field_names, "[\"Name\"]")
+        self.assertIsNone(second_request.field_names)
 
     def test_resolve_app_token_converts_wiki_token_to_base_token(self):
         reader = self._build_reader_without_init()
