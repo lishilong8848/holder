@@ -1,0 +1,66 @@
+# Build outputs
+/dist/
+/build/
+/build_output/
+/node_modules/
+.chrome_data/
+build/
+dist/
+output/
+
+# Environment and caches
+/.env
+.env
+/.venv/
+/venv/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# IDE and test tooling
+/.idea/
+/.vscode/
+/.pytest_cache/
+/.pytest_tmp/
+/.dev_instances/
+
+# Runtime state
+/.runtime/
+/runtime_state/
+/daily_scheduler_state.json
+/scheduler_first_launch_done.flag
+/build_meta.json
+/build_version_state.json
+
+# Temporary runtime and test artifacts
+/.tmp_runtime/
+/.tmp_runtime_tests/
+/.tmp_day_metric_sources/
+/.tmp_*/
+/.tmp_*.py
+
+# Logs and transient files
+*.log
+*.tmp
+*.bak
+*.tmp_keep
+
+# Project-specific backup and recovery files
+/表格计算部分代码.cpython-*.py
+/表格计算部分代码.py.corrupted_*.bak
+/表格计算部分代码.py.extracted_from_pkg.bak
+/表格计算部分代码.py.pass2.bak
+/表格计算部分代码.py.recovered.tmp_keep
+/表格计算部分代码.py.recovered.uncompyle6.tmp_keep
+/表格计算部分代码.py.syntaxfix.bak
+/表格计算配置.backup.*.json
+/表格计算配置.json.*.bak
+
+# Existing local-only project artifacts
+/docs/
+/全景平台月报自动定时上传.spec
+tests/
+!tests/
+!tests/unit/
+!tests/unit/test_handover_shift_interval_filters.py
+!tests/unit/test_settings_loader_handover_shift_fields.py

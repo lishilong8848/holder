@@ -7,8 +7,13 @@ from datetime import datetime
 from io import BytesIO
 from typing import Any, Dict, List, Optional, Tuple
 
-import ddddocr
 from PIL import Image
+
+# Pillow 10+ 移除了 ANTIALIAS，但 ddddocr 内部仍在使用，需要兼容补丁
+if not hasattr(Image, "ANTIALIAS"):
+    Image.ANTIALIAS = Image.LANCZOS
+
+import ddddocr
 from selenium import webdriver
 from selenium.common.exceptions import NoAlertPresentException, TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
@@ -97,7 +102,7 @@ class CertificateQuery:
         self.driver.implicitly_wait(0)
         self.page_wait = WebDriverWait(self.driver, self.page_timeout)
         self.query_wait = WebDriverWait(self.driver, self.query_timeout)
-        self.ocr = ddddocr.DdddOcr(show_ad=False)
+        self.ocr = ddddocr.DdddOcr()
         self._service_process = getattr(getattr(self.driver, "service", None), "process", None)
 
     def __enter__(self):
@@ -114,6 +119,7 @@ class CertificateQuery:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-software-rasterizer")
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
@@ -121,6 +127,11 @@ class CertificateQuery:
         options.add_argument("--ignore-certificate-errors")
 
         if self.user_data_dir:
+            # 尝试清理可能导致崩溃的锁文件 (Windows 环境常见)
+            lock_file = os.path.join(self.user_data_dir, "SingletonLock")
+            if os.path.exists(lock_file):
+                with suppress(Exception):
+                    os.remove(lock_file)
             options.add_argument(f"--user-data-dir={self.user_data_dir}")
 
         if self.chrome_bin:
@@ -355,6 +366,7 @@ class CertificateQuery:
     def _compress_png_to_jpeg(png_bytes: bytes) -> bytes:
         image = Image.open(BytesIO(png_bytes)).convert("RGB")
         buffer = BytesIO()
+        # Pillow 10+ 移除了 ANTIALIAS，改用 Resampling.LANCZOS 或直接使用 Image.LANCZOS
         image.save(buffer, format="JPEG", quality=80, optimize=True)
         return buffer.getvalue()
 

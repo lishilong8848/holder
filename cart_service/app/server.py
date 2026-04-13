@@ -2,7 +2,7 @@ import logging
 import os
 from pathlib import Path
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
@@ -25,6 +25,7 @@ try:
         PersonQueryResult,
     )
     from .feishu_reader import FeishuTableReader
+    from .feishu_listener import create_listener_from_env
     from .service import CertificateService
 except ImportError:
     project_root = Path(__file__).resolve().parents[1]
@@ -37,6 +38,7 @@ except ImportError:
         PersonQueryResult,
     )
     from app.feishu_reader import FeishuTableReader
+    from app.feishu_listener import create_listener_from_env
     from app.service import CertificateService
 
 
@@ -51,6 +53,47 @@ SUPPORTED_CERT_TYPES = (
 )
 
 app = FastAPI(title="证书批量查询回填 API (并发增强版)", version="3.1.0")
+
+
+# === 飞书群消息监听器，服务启动时自动运行 ===
+_feishu_handler_client = None
+
+
+def _message_callback(msg: dict) -> None:
+    """群消息处理回调：检测 记录ID=xxx 并触发完整业务流程"""
+    global _feishu_handler_client
+
+    try:
+        from .message_handler import handle_message_async
+    except ImportError:
+        from app.message_handler import handle_message_async
+
+    if _feishu_handler_client is None:
+        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
+        app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
+        app_token = os.environ.get("FEISHU_APP_TOKEN", "X9CwbB3zhaLK7JsQZVZcFR9fnTf").strip()
+        table_id = os.environ.get("FEISHU_TABLE_ID", "tblWHIbp172MNjM1").strip()
+
+        if app_id and app_secret:
+            _feishu_handler_client = FeishuTableReader(
+                app_id=app_id,
+                app_secret=app_secret,
+                app_token=app_token,
+                table_id=table_id,
+            )
+
+    if _feishu_handler_client:
+        handle_message_async(msg, _feishu_handler_client)
+
+
+@app.on_event("startup")
+async def startup_feishu_listener():
+    """服务启动时自动初始化飞书群消息监听器"""
+    started = create_listener_from_env(on_message=_message_callback)
+    if started:
+        logger.info("飞书群消息监听器已集成到服务")
+    else:
+        logger.info("未配置飞书监听环境变量，跳过群消息监听")
 
 
 class FeishuConfigRequest(BaseModel):
@@ -101,6 +144,28 @@ class BatchQueryResponse(BaseModel):
     success: int
     failed: int
     results: List[ResultItem]
+
+
+class CertificateDetail(BaseModel):
+    fields: Dict[str, Any]
+    local_path: Optional[str] = None
+
+
+class PersonQueryDetail(BaseModel):
+    record_id: str
+    name: str
+    id_number: str
+    status: str
+    error: Optional[str] = None
+    records: List[Dict[str, Any]]
+    selected_certificates: Dict[str, CertificateDetail]
+    queried_at: str
+
+
+class OnlyQueryResponse(BaseModel):
+    batch_path: str
+    total: int
+    results: List[PersonQueryDetail]
 
 
 @app.exception_handler(RequestValidationError)
@@ -214,7 +279,7 @@ async def batch_query(request: BatchQueryRequest):
         if result.status == "success":
             try:
                 # 构造回填字段并执行更新
-                fields = service._build_feishu_fields(result, field_mapping)
+                fields = service.build_feishu_fields(result, field_mapping)
                 if service.feishu_client.update_record(result.record_id, fields):
                     person_success = True
                 else:
@@ -245,6 +310,86 @@ async def batch_query(request: BatchQueryRequest):
         success=success_count,
         failed=failed_count,
         results=response_results,
+    )
+
+
+@app.post("/api/v1/query/only", response_model=OnlyQueryResponse)
+async def query_only(
+    people: List[PersonRequest],
+    concurrency: Optional[int] = Query(None),
+    debug: bool = Query(False)
+):
+    import json
+    from datetime import datetime
+    
+    normalized_people = normalize_people(people)
+    concurrency = concurrency or DEFAULT_CONCURRENCY
+
+    service = CertificateService(
+        max_workers=concurrency,
+        chrome_bin=os.environ.get("CHROME_BIN"),
+        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH")
+    )
+
+    try:
+        query_results = service.run_batch(people=normalized_people)
+    except Exception as exc:
+        logger.error(f"查询引擎故障: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"查询引擎故障: {exc}")
+
+    # 准备本地存储
+    project_root = Path(__file__).resolve().parents[1]
+    output_root = project_root / "output"
+    output_root.mkdir(exist_ok=True)
+    
+    batch_id = datetime.now().strftime("batch_%Y%m%d_%H%M%S")
+    batch_dir = output_root / batch_id
+    batch_dir.mkdir(exist_ok=True)
+
+    response_items = []
+    for res in query_results:
+        selected_certs = {}
+        query_time_str = datetime.now().strftime("%Y%m%d%H%M%S")
+        
+        for cert_type, card in res.selected_certificates.items():
+            local_img_path = None
+            if card.screenshot_bytes:
+                # 命名格式: 姓名_证件号_时间_证件名.jpg
+                cert_display_name = (card.fields.get("操作项目") or cert_type).replace("/", "_").replace("\\", "_")
+                filename = f"{res.name}_{res.id_number}_{query_time_str}_{cert_display_name}.jpg"
+                save_path = batch_dir / filename
+                with open(save_path, "wb") as f:
+                    f.write(card.screenshot_bytes)
+                local_img_path = str(save_path.absolute())
+            
+            selected_certs[cert_type] = CertificateDetail(
+                fields=card.fields,
+                local_path=local_img_path
+            )
+            
+        detail = PersonQueryDetail(
+            record_id=res.record_id,
+            name=res.name,
+            id_number=res.id_number,
+            status=res.status,
+            error=res.error,
+            records=res.records,
+            selected_certificates=selected_certs,
+            queried_at=res.queried_at
+        )
+        response_items.append(detail)
+
+    # 保存 info.json 到本地
+    info_json_path = batch_dir / "results.json"
+    with open(info_json_path, "w", encoding="utf-8") as f:
+        # 使用 pydantic 的 model_dump 来序列化
+        results_data = [item.model_dump() for item in response_items]
+        json.dump(results_data, f, ensure_ascii=False, indent=2)
+
+    return OnlyQueryResponse(
+        batch_path=str(batch_dir.absolute()),
+        total=len(response_items),
+        results=response_items
     )
 
 

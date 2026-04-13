@@ -33,22 +33,29 @@ class CertificateService:
         self.chrome_bin = chrome_bin
         self.chromedriver_path = chromedriver_path
 
-    def _query_single_person(self, person: Dict[str, str]) -> PersonQueryResult:
+    def _query_single_person(self, person: Dict[str, str], worker_index: int = 0) -> PersonQueryResult:
         """单个人员查询逻辑，供线程池调用"""
-        import tempfile
+        from pathlib import Path
         record_id = person.get("record_id", "")
         name = person.get("name", "")
         id_number = person.get("id_number", "")
 
-        # 为每个线程创建独立的浏览器实例，并分配唯一的 User Data Dir 以避免冲突
+        # 为每个并发 worker 分配独立的 profile 子目录，避免 Chrome 数据目录锁冲突
+        project_root = Path(__file__).resolve().parents[1]
+        base_data_dir = project_root / ".chrome_data"
+        base_data_dir.mkdir(exist_ok=True)
+        
+        # 每个 worker 使用独立的 profile 目录: profile_0, profile_1, ...
+        user_data_dir = base_data_dir / f"profile_{worker_index}"
+        user_data_dir.mkdir(exist_ok=True)
+
         try:
-            with tempfile.TemporaryDirectory(prefix="chrome_data_") as tmp_dir:
-                with CertificateQuery(
-                    chrome_bin=self.chrome_bin, 
-                    chromedriver_path=self.chromedriver_path,
-                    user_data_dir=tmp_dir
-                ) as query:
-                    return query.query_person(record_id, name, id_number)
+            with CertificateQuery(
+                chrome_bin=self.chrome_bin, 
+                chromedriver_path=self.chromedriver_path,
+                user_data_dir=str(user_data_dir)
+            ) as query:
+                return query.query_person(record_id, name, id_number)
         except Exception as e:
             logger.error(f"查询人员 {name} 失败: {e}")
             return PersonQueryResult(
@@ -70,8 +77,11 @@ class CertificateService:
         
         results: List[PersonQueryResult] = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # 提交任务，并保存 futures 列表以维持顺序
-            futures = [executor.submit(self._query_single_person, p) for p in people]
+            # 提交任务，worker_index 取模确保复用有限的 profile 目录
+            futures = [
+                executor.submit(self._query_single_person, p, i % self.max_workers) 
+                for i, p in enumerate(people)
+            ]
             
             for i, future in enumerate(futures):
                 result = future.result()
@@ -102,7 +112,7 @@ class CertificateService:
                 
             try:
                 # 构造更新字段
-                fields = self._build_feishu_fields(result, field_mapping)
+                fields = self.build_feishu_fields(result, field_mapping)
                 if self.feishu_client.update_record(result.record_id, fields):
                     success_count += 1
                 else:
@@ -113,7 +123,7 @@ class CertificateService:
                 
         return {"success": success_count, "failed": failed_count}
 
-    def _build_feishu_fields(
+    def build_feishu_fields(
         self, 
         result: PersonQueryResult, 
         field_mapping: Dict[str, Dict[str, str]]
