@@ -7,7 +7,7 @@
 build/
 dist/
 output/
-
+*.spec
 # Environment and caches
 /.env
 .env
