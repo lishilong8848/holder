@@ -1,11 +1,14 @@
 {
   "feishu": {
-    "app_id": "cli_a9d1c9fe9d381cee",
-    "app_secret": "PCZSOMI9ITqFWUkqT5TtQcVljP0Sx48y",
-    "app_token": "UdCTbp48hawoygswWaSc5y45nDe",
-    "table_id": "tblnzO9VIoS2dlLd"
+    "app_id": "cli_xxx",
+    "app_secret": "secret_xxx",
+    "app_token": "base_or_wiki_xxx",
+    "table_id": "tbl_xxx"
   },
-  "debug": true,
+  "lookup": {
+    "id_number_field": "身份证号",
+    "name_field": "姓名"
+  },
   "field_mapping": {
     "high_voltage": {
       "expire_field": "高压证-到期日期",
@@ -34,12 +37,10 @@
   },
   "people": [
     {
-      "record_id": "recuXM12hScY7A",
       "name": "李世龙",
       "id_number": "13012620001028361X"
     },
     {
-      "record_id": "recv07X3wlZvnV",
       "name": "范邵桦",
       "id_number": "320601199203020330"
     }

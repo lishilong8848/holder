@@ -13,6 +13,8 @@ from app.certificate_query import (
 )
 
 
+
+
 class FakeElement:
     def __init__(self, text="", displayed=True):
         self.text = text

@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from io import BytesIO
 from typing import Any, Dict, List, Optional
@@ -19,13 +20,15 @@ from lark_oapi.api.drive.v1 import UploadAllMediaRequest, UploadAllMediaRequestB
 from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
 
 
+logger = logging.getLogger(__name__)
+
 BITABLE_MEDIA_PARENT_TYPE = "bitable_image"
 WIKI_NODE_OBJ_TYPE = "wiki"
 BITABLE_OBJ_TYPE = "bitable"
 
 
 class FeishuTableReader:
-    """Minimal Feishu bitable client for token refresh, media upload, and record update."""
+    """精简版飞书多维表客户端，负责刷新 token、上传图片和更新记录。"""
 
     def __init__(self, app_id: str, app_secret: str, app_token: str, table_id: str):
         self.app_id = app_id
@@ -58,7 +61,7 @@ class FeishuTableReader:
         )
         response = self.client.auth.v3.tenant_access_token.internal(request)
         if not response.success():
-            raise RuntimeError(f"获取飞书 tenant_access_token 失败: {response.code} - {response.msg}")
+            raise RuntimeError(f"获取飞书 tenant_access_token 失败：{response.code} - {response.msg}")
 
         payload = json.loads(response.raw.content)
         self.tenant_token = payload["tenant_access_token"]
@@ -97,7 +100,7 @@ class FeishuTableReader:
 
         if response.success() and resolved_token:
             if resolved_obj_type and resolved_obj_type != BITABLE_OBJ_TYPE:
-                raise RuntimeError(f"wiki token 指向的对象不是多维表: {resolved_obj_type}")
+                raise RuntimeError(f"wiki token 指向的对象不是多维表：{resolved_obj_type}")
             self._resolved_app_token = resolved_token
             self.app_token = resolved_token
             return resolved_token
@@ -108,7 +111,7 @@ class FeishuTableReader:
 
     def upload_image(self, filename: str, content: bytes) -> str:
         if not content:
-            raise RuntimeError("上传飞书附件失败: 图片内容为空")
+            raise RuntimeError("上传飞书附件失败：图片内容为空")
 
         request = (
             UploadAllMediaRequest.builder()
@@ -127,8 +130,50 @@ class FeishuTableReader:
         response = self.client.drive.v1.media.upload_all(request, self._request_option())
         file_token = getattr(getattr(response, "data", None), "file_token", None)
         if not response.success() or not file_token:
-            raise RuntimeError(f"上传飞书附件失败: {response.code} - {response.msg}")
+            raise RuntimeError(f"上传飞书附件失败：{response.code} - {response.msg}")
         return file_token
+
+    def list_records(self, *, field_names: Optional[List[str]] = None, page_size: int = 500) -> List[AppTableRecord]:
+        try:
+            return self._list_records(field_names=field_names, page_size=page_size)
+        except RuntimeError:
+            if not field_names:
+                raise
+            logger.warning("按字段过滤拉取飞书记录失败，将自动重试全量拉取")
+            return self._list_records(field_names=None, page_size=page_size)
+
+    def _list_records(self, *, field_names: Optional[List[str]], page_size: int) -> List[AppTableRecord]:
+        records: List[AppTableRecord] = []
+        page_token: Optional[str] = None
+        resolved_app_token = self.resolve_app_token()
+
+        while True:
+            builder = (
+                ListAppTableRecordRequest.builder()
+                .app_token(resolved_app_token)
+                .table_id(self.table_id)
+                .page_size(page_size)
+            )
+            if field_names:
+                builder = builder.field_names(json.dumps(field_names, ensure_ascii=False))
+            if page_token:
+                builder = builder.page_token(page_token)
+
+            request = builder.build()
+            response = self.client.bitable.v1.app_table_record.list(request, self._request_option())
+            if not response.success():
+                raise RuntimeError(f"拉取飞书记录失败：{response.code} - {response.msg}")
+
+            data = getattr(response, "data", None)
+            records.extend(list(getattr(data, "items", None) or []))
+
+            if not getattr(data, "has_more", False):
+                break
+            page_token = getattr(data, "page_token", None)
+            if not page_token:
+                break
+
+        return records
 
     @staticmethod
     def build_attachment_field(file_token: str, filename: str, size: int, mime_type: str) -> List[Any]:
