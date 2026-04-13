@@ -8,7 +8,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -27,7 +27,14 @@ try:
     )
     from .feishu_reader import FeishuTableReader
     from .feishu_listener import create_listener_from_env
-    from .service import CertificateService
+    from .service import (
+        BatchPersonResult,
+        BatchRequestCoordinator,
+        CertificateService,
+        ClientDisconnectedError,
+        QueueFullError,
+        QueueTimeoutError,
+    )
 except ImportError:
     project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
@@ -40,11 +47,24 @@ except ImportError:
     )
     from app.feishu_reader import FeishuTableReader
     from app.feishu_listener import create_listener_from_env
-    from app.service import CertificateService
+    from app.service import (
+        BatchPersonResult,
+        BatchRequestCoordinator,
+        CertificateService,
+        ClientDisconnectedError,
+        QueueFullError,
+        QueueTimeoutError,
+    )
 
 
 MAX_BATCH_SIZE = 50  # 提升并发后的批量上限
 DEFAULT_CONCURRENCY = int(os.environ.get("DEFAULT_CONCURRENCY", 3))
+REQUEST_VALIDATION_DETAIL = "请求参数不合法"
+
+REQUEST_COORDINATOR = BatchRequestCoordinator(
+    max_queue_size=100,
+    queue_timeout_seconds=300,
+)
 
 SUPPORTED_CERT_TYPES = (
     "high_voltage",
@@ -303,7 +323,7 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
     )
 
     try:
-        queued_result = await REQUEST_COORDINATOR.run(
+        query_results = await REQUEST_COORDINATOR.run(
             request_id=request_id,
             work=lambda: asyncio.to_thread(
                 service.process_batch_request,
