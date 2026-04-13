@@ -200,6 +200,26 @@ def process_record_message(record_id: str, feishu_client) -> None:
         print(f"[消息处理] 未找到记录 {record_id}，退出")
         return
 
+    # 获取施工编码（源表公式字段，可能返回 dict / str化的dict / 纯文本）
+    shigong_code_raw = fields.get("施工编码", "")
+    print(f"[消息处理] 施工编码原始值: {repr(shigong_code_raw)}")
+    if isinstance(shigong_code_raw, dict):
+        shigong_code = shigong_code_raw.get("text", shigong_code_raw.get("value", ""))
+    elif isinstance(shigong_code_raw, list):
+        item = shigong_code_raw[0] if shigong_code_raw else ""
+        shigong_code = item.get("text", item) if isinstance(item, dict) else str(item)
+    elif isinstance(shigong_code_raw, str) and shigong_code_raw.startswith("{"):
+        # 飞书有时把公式结果序列化为字符串化的字典，如 "{'text': 'SG02-1005', ...}"
+        import ast
+        try:
+            parsed = ast.literal_eval(shigong_code_raw)
+            shigong_code = parsed.get("text", parsed.get("value", shigong_code_raw)) if isinstance(parsed, dict) else str(parsed)
+        except Exception:
+            shigong_code = shigong_code_raw
+    else:
+        shigong_code = str(shigong_code_raw) if shigong_code_raw else ""
+    print(f"[消息处理] 施工编码解析结果: {shigong_code}")
+
     print(f"[消息处理] 记录字段名: {list(fields.keys())}")
 
     # === 步骤 2：下载所有附件和图片 ===
@@ -279,16 +299,45 @@ def process_record_message(record_id: str, feishu_client) -> None:
     ]
 
     service = CertificateService(
+        feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},  # 填充占位符，下方立刻用外部完整的 client 接管
         max_workers=min(3, len(people_for_query)),
         chrome_bin=os.environ.get("CHROME_BIN"),
         chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
     )
+    service.feishu_client = feishu_client  # 绑定以允许上传图片附件
 
     print(f"[消息处理] 步骤4: 开始证书查询...")
     query_results = service.run_batch(people=people_for_query)
 
     # === 步骤 5：将结果写入飞书表 ===
     print(f"[消息处理] 步骤5: 写入飞书表 {TARGET_TABLE_ID}...")
+
+    FIELD_MAPPING = {
+        "high_voltage": {
+            "attachment_field": "高压证",
+            "expire_field": "高压证-到期日期",
+            "review_due_field": "高压证-应复审日期",
+            "review_actual_field": "高压证-实际复审日期",
+        },
+        "low_voltage": {
+            "attachment_field": "低压证",
+            "expire_field": "低压证-到期日期",
+            "review_due_field": "低压证-应复审日期",
+            "review_actual_field": "低压证-实际复审日期",
+        },
+        "refrigeration": {
+            "attachment_field": "制冷证",
+            "expire_field": "制冷证-到期日期",
+            "review_due_field": "制冷证-应复审日期",
+            "review_actual_field": "制冷证-实际复审日期",
+        },
+        "working_at_height": {
+            "attachment_field": "登高证",
+            "expire_field": "登高证-到期日期",
+            "review_due_field": "登高证-应复审日期",
+            "review_actual_field": "登高证-实际复审日期",
+        },
+    }
 
     created_count = 0
     for i, result in enumerate(query_results):
@@ -298,28 +347,42 @@ def process_record_message(record_id: str, feishu_client) -> None:
             print(f"[消息处理] {person['name']}: 查询状态={result.status}, 跳过回写")
             continue
 
-        # 每个证书类型创建一条记录
-        for cert_type, card in result.selected_certificates.items():
-            cert_name = card.fields.get("操作项目", CERT_TYPE_DISPLAY.get(cert_type, cert_type))
-
-            new_fields = {
+        try:
+            # 自动上传附件及拼装全部映射的证书日期
+            new_fields = service.build_feishu_fields(result, FIELD_MAPPING)
+            
+            # 加入外键与该人员的基础属性
+            new_fields.update({
                 "关联施工单": [record_id],
+                "施工编码": shigong_code,
                 "姓名": person["name"],
                 "身份证号": person["id_number"],
                 "手机号": person["phone"],
-                "证书资质": cert_name,
-            }
+            })
+
+            # 清理 new_fields 中所有的 None 值和空列表
+            cleaned_fields = {k: v for k, v in new_fields.items() if v is not None}
+
+            # 调试：打印每个字段的类型和值
+            print(f"[消息处理] 即将提交的字段 ({person['name']}):")
+            for k, v in cleaned_fields.items():
+                print(f"  {k}: type={type(v).__name__}, value={repr(v)[:100]}")
 
             new_record_id = feishu_client.create_record(
-                fields=new_fields,
+                fields=cleaned_fields,
                 table_id=TARGET_TABLE_ID,
             )
 
             if new_record_id:
                 created_count += 1
-                print(f"[消息处理] ✅ 已创建记录: {person['name']} - {cert_name}")
+                print(f"[消息处理] ✅ 已创建/更新多证合一记录: {person['name']}")
             else:
-                print(f"[消息处理] ❌ 创建记录失败: {person['name']} - {cert_name}")
+                print(f"[消息处理] ❌ 创建/更新多证合一记录失败: {person['name']}")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[消息处理] ❌ 构建记录异常: {person['name']} - {e}")
 
     # === 完成 ===
     print(f"\n{'#'*60}")

@@ -371,8 +371,40 @@ class CertificateQuery:
         return buffer.getvalue()
 
     def capture_element_screenshot(self, element) -> Optional[bytes]:
+        """截取元素完整截图，自动处理超出视口的情况"""
         try:
-            return self._compress_png_to_jpeg(element.screenshot_as_png)
+            # 先滚动到元素位置确保可见
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+            import time
+            time.sleep(0.3)  # 等待滚动完成和渲染稳定
+
+            # 获取元素实际尺寸
+            elem_height = element.size["height"]
+            elem_width = element.size["width"]
+            
+            # 获取当前视口大小
+            viewport = self.driver.get_window_size()
+            original_width = viewport["width"]
+            original_height = viewport["height"]
+
+            # 如果元素高度超过视口，临时扩大窗口以容纳完整元素
+            need_resize = elem_height > original_height - 200 or elem_width > original_width - 100
+            if need_resize:
+                new_height = max(original_height, elem_height + 300)
+                new_width = max(original_width, elem_width + 100)
+                self.driver.set_window_size(new_width, new_height)
+                time.sleep(0.3)
+                # 重新滚动（窗口大小变了之后位置可能偏移）
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                time.sleep(0.2)
+
+            png_bytes = element.screenshot_as_png
+
+            # 恢复窗口大小
+            if need_resize:
+                self.driver.set_window_size(original_width, original_height)
+
+            return self._compress_png_to_jpeg(png_bytes)
         except Exception:
             return None
 

@@ -4,6 +4,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Deque, Dict, Generic, List, Optional, TypeVar
+from concurrent.futures import ThreadPoolExecutor
 
 from .certificate_query import (
     EFFECTIVE_END_FIELD,
@@ -184,10 +185,12 @@ class CertificateService:
         self,
         *,
         feishu_config: Dict[str, str],
+        max_workers: int = 3,
         chrome_bin: Optional[str] = None,
         chromedriver_path: Optional[str] = None,
     ):
         self.feishu_client = FeishuTableReader(**feishu_config)
+        self.max_workers = max_workers
         self.chrome_bin = chrome_bin
         self.chromedriver_path = chromedriver_path
 
@@ -314,7 +317,7 @@ class CertificateService:
 
             filename = self.build_certificate_filename(
                 result=result,
-                record_reference=record_reference,
+                record_reference=result.record_id or "",
                 cert_type=cert_type,
                 card=card,
             )
