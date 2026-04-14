@@ -15,13 +15,25 @@ from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-load_dotenv()
+project_root = Path(__file__).resolve().parents[1]
+
+try:
+    from .env_loader import load_app_env
+except ImportError:
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from app.env_loader import load_app_env
+
+loaded_env_path = load_app_env(project_root=project_root, override=True)
+if loaded_env_path:
+    print(f"[系统准备] 已加载环境配置: {loaded_env_path}", flush=True)
+else:
+    print("[系统准备] 未找到 .env 文件，使用当前系统环境变量", flush=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,7 +56,6 @@ try:
         QueueTimeoutError,
     )
 except ImportError:
-    project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
     from app.certificate_query import (
