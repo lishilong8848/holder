@@ -100,7 +100,9 @@ def _message_callback(msg: dict) -> None:
     if _feishu_handler_client is None:
         app_id = os.environ.get("FEISHU_APP_ID", "").strip()
         app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-        app_token = os.environ.get("FEISHU_APP_TOKEN", "X9CwbB3zhaLK7JsQZVZcFR9fnTf").strip()
+        app_token = os.environ.get(
+            "FEISHU_APP_TOKEN", "X9CwbB3zhaLK7JsQZVZcFR9fnTf"
+        ).strip()
         table_id = os.environ.get("FEISHU_TABLE_ID", "tblWHIbp172MNjM1").strip()
 
         if app_id and app_secret:
@@ -144,7 +146,9 @@ async def trigger_by_record_id(req: TriggerRequest):
     """
     record_id = req.record_id.strip()
     if not record_id.startswith("rec"):
-        raise HTTPException(status_code=400, detail="record_id 格式不正确，应以 rec 开头")
+        raise HTTPException(
+            status_code=400, detail="record_id 格式不正确，应以 rec 开头"
+        )
 
     # 初始化 feishu client（复用已有逻辑）
     global _feishu_handler_client
@@ -159,12 +163,16 @@ async def trigger_by_record_id(req: TriggerRequest):
             except ImportError:
                 from app.feishu_reader import FeishuTableReader
             _feishu_handler_client = FeishuTableReader(
-                app_id=app_id, app_secret=app_secret,
-                app_token=app_token, table_id=table_id,
+                app_id=app_id,
+                app_secret=app_secret,
+                app_token=app_token,
+                table_id=table_id,
             )
 
     if not _feishu_handler_client:
-        raise HTTPException(status_code=500, detail="飞书客户端未初始化，请检查环境变量配置")
+        raise HTTPException(
+            status_code=500, detail="飞书客户端未初始化，请检查环境变量配置"
+        )
 
     try:
         from .message_handler import process_record_message
@@ -172,6 +180,7 @@ async def trigger_by_record_id(req: TriggerRequest):
         from app.message_handler import process_record_message
 
     import threading
+
     def _run():
         try:
             process_record_message(record_id, _feishu_handler_client)
@@ -182,7 +191,11 @@ async def trigger_by_record_id(req: TriggerRequest):
     thread.start()
     logger.info(f"[API触发] 已异步启动记录 {record_id} 的处理任务")
 
-    return {"status": "accepted", "record_id": record_id, "message": "任务已接受，正在后台处理"}
+    return {
+        "status": "accepted",
+        "record_id": record_id,
+        "message": "任务已接受，正在后台处理",
+    }
 
 
 class FeishuConfigRequest(BaseModel):
@@ -265,7 +278,9 @@ class OnlyQueryResponse(BaseModel):
 
 
 @app.exception_handler(RequestValidationError)
-async def request_validation_exception_handler(_request: Request, exc: RequestValidationError):
+async def request_validation_exception_handler(
+    _request: Request, exc: RequestValidationError
+):
     return JSONResponse(
         status_code=400,
         content={
@@ -288,7 +303,9 @@ def normalize_feishu_config(config: FeishuConfigRequest) -> Dict[str, str]:
     return normalized
 
 
-def normalize_field_mapping(field_mapping: FieldMappingRequest) -> Dict[str, Dict[str, str]]:
+def normalize_field_mapping(
+    field_mapping: FieldMappingRequest,
+) -> Dict[str, Dict[str, str]]:
     normalized: Dict[str, Dict[str, str]] = {}
     for cert_type in SUPPORTED_CERT_TYPES:
         mapping = getattr(field_mapping, cert_type)
@@ -296,19 +313,31 @@ def normalize_field_mapping(field_mapping: FieldMappingRequest) -> Dict[str, Dic
             continue
 
         clean_mapping: Dict[str, str] = {}
-        for field_name in ("expire_field", "review_due_field", "review_actual_field", "attachment_field"):
+        for field_name in (
+            "expire_field",
+            "review_due_field",
+            "review_actual_field",
+            "attachment_field",
+        ):
             value = getattr(mapping, field_name).strip()
             if not value:
-                raise HTTPException(status_code=400, detail=f"field_mapping.{cert_type}.{field_name} 不能为空")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"field_mapping.{cert_type}.{field_name} 不能为空",
+                )
             clean_mapping[field_name] = value
         normalized[cert_type] = clean_mapping
 
     if not normalized:
-        raise HTTPException(status_code=400, detail="field_mapping 至少需要配置一种证书类型")
+        raise HTTPException(
+            status_code=400, detail="field_mapping 至少需要配置一种证书类型"
+        )
     return normalized
 
 
-def normalize_lookup(lookup: Optional[LookupRequest]) -> Optional[Dict[str, Optional[str]]]:
+def normalize_lookup(
+    lookup: Optional[LookupRequest],
+) -> Optional[Dict[str, Optional[str]]]:
     if lookup is None:
         return None
 
@@ -330,7 +359,9 @@ def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
     if not people:
         raise HTTPException(status_code=400, detail="people 不能为空")
     if len(people) > MAX_BATCH_SIZE:
-        raise HTTPException(status_code=400, detail=f"people 最多支持 {MAX_BATCH_SIZE} 条")
+        raise HTTPException(
+            status_code=400, detail=f"people 最多支持 {MAX_BATCH_SIZE} 条"
+        )
 
     normalized_people: List[Dict[str, str]] = []
     for index, person in enumerate(people, start=1):
@@ -338,9 +369,13 @@ def normalize_people(people: List[PersonRequest]) -> List[Dict[str, str]]:
         name = person.name.strip()
         id_number = person.id_number.strip()
         if not name:
-            raise HTTPException(status_code=400, detail=f"people[{index}].name 不能为空")
+            raise HTTPException(
+                status_code=400, detail=f"people[{index}].name 不能为空"
+            )
         if not id_number:
-            raise HTTPException(status_code=400, detail=f"people[{index}].id_number 不能为空")
+            raise HTTPException(
+                status_code=400, detail=f"people[{index}].id_number 不能为空"
+            )
         normalized_people.append(
             {
                 "record_id": record_id,
@@ -371,7 +406,11 @@ def healthz():
     return {"status": "ok"}
 
 
-@app.post("/api/v1/query/batch", response_model=BatchQueryResponse, response_model_exclude_none=True)
+@app.post(
+    "/api/v1/query/batch",
+    response_model=BatchQueryResponse,
+    response_model_exclude_none=True,
+)
 async def batch_query(request: Request, payload: BatchQueryRequest):
     request_id = uuid.uuid4().hex
     feishu_config = normalize_feishu_config(payload.feishu)
@@ -379,10 +418,16 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
     field_mapping = normalize_field_mapping(payload.field_mapping)
     people = normalize_people(payload.people)
     if any(not person["record_id"] for person in people) and lookup is None:
-        raise HTTPException(status_code=400, detail="未传入 people[].record_id 时，必须提供 lookup 配置")
+        raise HTTPException(
+            status_code=400, detail="未传入 people[].record_id 时，必须提供 lookup 配置"
+        )
 
     if payload.concurrency is not None:
-        logger.warning("请求 %s 传入了已废弃的 concurrency=%s，系统将忽略该参数", request_id, payload.concurrency)
+        logger.warning(
+            "请求 %s 传入了已废弃的 concurrency=%s，系统将忽略该参数",
+            request_id,
+            payload.concurrency,
+        )
 
     service = CertificateService(
         feishu_config=feishu_config,
@@ -430,18 +475,18 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
 async def query_only(
     people: List[PersonRequest],
     concurrency: Optional[int] = Query(None),
-    debug: bool = Query(False)
+    debug: bool = Query(False),
 ):
     import json
     from datetime import datetime
-    
+
     normalized_people = normalize_people(people)
     concurrency = concurrency or DEFAULT_CONCURRENCY
 
     service = CertificateService(
         max_workers=concurrency,
         chrome_bin=os.environ.get("CHROME_BIN"),
-        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH")
+        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
     )
 
     try:
@@ -454,7 +499,7 @@ async def query_only(
     project_root = Path(__file__).resolve().parents[1]
     output_root = project_root / "output"
     output_root.mkdir(exist_ok=True)
-    
+
     batch_id = datetime.now().strftime("batch_%Y%m%d_%H%M%S")
     batch_dir = output_root / batch_id
     batch_dir.mkdir(exist_ok=True)
@@ -463,23 +508,26 @@ async def query_only(
     for res in query_results:
         selected_certs = {}
         query_time_str = datetime.now().strftime("%Y%m%d%H%M%S")
-        
+
         for cert_type, card in res.selected_certificates.items():
             local_img_path = None
             if card.screenshot_bytes:
                 # 命名格式: 姓名_证件号_时间_证件名.jpg
-                cert_display_name = (card.fields.get("操作项目") or cert_type).replace("/", "_").replace("\\", "_")
+                cert_display_name = (
+                    (card.fields.get("操作项目") or cert_type)
+                    .replace("/", "_")
+                    .replace("\\", "_")
+                )
                 filename = f"{res.name}_{res.id_number}_{query_time_str}_{cert_display_name}.jpg"
                 save_path = batch_dir / filename
                 with open(save_path, "wb") as f:
                     f.write(card.screenshot_bytes)
                 local_img_path = str(save_path.absolute())
-            
+
             selected_certs[cert_type] = CertificateDetail(
-                fields=card.fields,
-                local_path=local_img_path
+                fields=card.fields, local_path=local_img_path
             )
-            
+
         detail = PersonQueryDetail(
             record_id=res.record_id,
             name=res.name,
@@ -488,7 +536,7 @@ async def query_only(
             error=res.error,
             records=res.records,
             selected_certificates=selected_certs,
-            queried_at=res.queried_at
+            queried_at=res.queried_at,
         )
         response_items.append(detail)
 
@@ -502,7 +550,7 @@ async def query_only(
     return OnlyQueryResponse(
         batch_path=str(batch_dir.absolute()),
         total=len(response_items),
-        results=response_items
+        results=response_items,
     )
 
 

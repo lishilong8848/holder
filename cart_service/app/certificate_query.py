@@ -112,7 +112,13 @@ class CertificateQuery:
         """延迟加载 ddddocr，防止导入阶段挂起"""
         if self._ocr is None:
             import ddddocr
-            self._ocr = ddddocr.DdddOcr(show_ad=False)
+            try:
+                self._ocr = ddddocr.DdddOcr(show_ad=False)
+            except TypeError as exc:
+                # 兼容旧版 ddddocr，其构造函数不支持 show_ad 参数。
+                if "show_ad" not in str(exc):
+                    raise
+                self._ocr = ddddocr.DdddOcr()
         return self._ocr
 
     def __enter__(self):

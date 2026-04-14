@@ -15,8 +15,10 @@ import re
 import logging
 import threading
 import ast
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from queue import Queue
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import openpyxl
@@ -42,6 +44,84 @@ CERT_TYPE_DISPLAY = {
     "refrigeration": "制冷与空调设备运行操作作业",
     "working_at_height": "高处安装、维护、拆除作业",
 }
+
+FIELD_MAPPING = {
+    "high_voltage": {
+        "attachment_field": "高压证",
+        "expire_field": "高压证-到期日期",
+        "review_due_field": "高压证-应复审日期",
+        "review_actual_field": "高压证-实际复审日期",
+    },
+    "low_voltage": {
+        "attachment_field": "低压证",
+        "expire_field": "低压证-到期日期",
+        "review_due_field": "低压证-应复审日期",
+        "review_actual_field": "低压证-实际复审日期",
+    },
+    "refrigeration": {
+        "attachment_field": "制冷证",
+        "expire_field": "制冷证-到期日期",
+        "review_due_field": "制冷证-应复审日期",
+        "review_actual_field": "制冷证-实际复审日期",
+    },
+    "working_at_height": {
+        "attachment_field": "登高证",
+        "expire_field": "登高证-到期日期",
+        "review_due_field": "登高证-应复审日期",
+        "review_actual_field": "登高证-实际复审日期",
+    },
+    "welding": {
+        "attachment_field": "焊接证",
+        "expire_field": "焊接证-到期日期",
+        "review_due_field": "焊接证-应复审日期",
+        "review_actual_field": "焊接证-实际复审日期",
+    },
+}
+
+
+@dataclass
+class RecordProcessingContext:
+    source_record_id: str
+    shigong_code: str
+    target_table_id: str
+    download_dir: Path
+    timestamp: str
+    personnel_count: int
+    expected_write_tasks: int
+    feishu_client: Any
+    service: Any
+    created_count: int = 0
+    completed_write_tasks: int = 0
+    done_event: threading.Event = field(default_factory=threading.Event)
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def mark_write_completed(self, *, created: bool) -> None:
+        with self.lock:
+            if created:
+                self.created_count += 1
+            self.completed_write_tasks += 1
+            if self.completed_write_tasks >= self.expected_write_tasks:
+                self.done_event.set()
+
+
+@dataclass
+class QueryTask:
+    context: RecordProcessingContext
+    query_record_id: str
+    person: Dict[str, str]
+
+
+@dataclass
+class WriteTask:
+    context: RecordProcessingContext
+    person: Dict[str, str]
+    query_result: Optional[Any] = None
+
+
+_GLOBAL_QUERY_QUEUE: Queue = Queue()
+_GLOBAL_WRITE_QUEUE: Queue = Queue()
+_workers_started = False
+_workers_lock = threading.Lock()
 
 RECORD_ID_LABEL_PATTERN = re.compile(
     r"(?:记录\s*ID|record[\s_-]*id)\s*[=＝:：]?\s*(rec[a-zA-Z0-9]{6,40})",
@@ -212,6 +292,21 @@ def _fuzzy_match_column(header: str, keywords: List[str]) -> bool:
     return any(kw in header_clean for kw in keywords)
 
 
+def should_query_certificate(job_type_raw: Any) -> bool:
+    """
+    根据“作业类型”判定是否需要查询证书。
+
+    规则：
+    - 空值 / 缺失：不查询
+    - 精确等于“一般作业”：不查询
+    - 其他非空值：查询
+    """
+    job_type = str(job_type_raw or "").strip()
+    if not job_type:
+        return False
+    return job_type != "一般作业"
+
+
 def _find_column_indices(headers: List[str]) -> Dict[str, Optional[int]]:
     """根据模糊匹配找到各字段对应的列索引"""
     mapping = {
@@ -249,7 +344,7 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
     """
     解析施工人员信息表 Excel，返回全部人员列表
     每个人员: {"name": ..., "id_number": ..., "phone": ..., "gender": ..., "has_permission": True/False}
-    has_permission 表示是否有特殊作业权限（需要查询证书）
+    has_permission 表示根据“作业类型”规则是否需要查询证书
     """
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
     ws = wb.active
@@ -272,12 +367,6 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
 
     personnel = []
     for row in rows[1:]:
-        # 检查操作权限标记
-        has_permission = False
-        if col_map["permission"] is not None:
-            perm_val = str(row[col_map["permission"]] or "").strip()
-            has_permission = (perm_val == "是")
-
         name = str(row[col_map["name"]] or "").strip()
         id_number = str(row[col_map["id_number"]] or "").strip()
         phone = ""
@@ -291,6 +380,7 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
         job_type_raw = ""
         if col_map["job_type"] is not None:
             job_type_raw = str(row[col_map["job_type"]] or "").strip()
+        has_permission = should_query_certificate(job_type_raw)
 
         if name and id_number:
             personnel.append({
@@ -304,8 +394,210 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
 
     wb.close()
     perm_count = sum(1 for p in personnel if p["has_permission"])
-    print(f"[消息处理] 解析到 {len(personnel)} 名人员, 其中 {perm_count} 人有特殊作业权限需查证书")
+    print(f"[消息处理] 解析到 {len(personnel)} 名人员, 其中 {perm_count} 人根据作业类型需查证书")
     return personnel
+
+
+def split_job_types(job_type_raw: str) -> List[str]:
+    return [job_type.strip() for job_type in (job_type_raw or "").split("/") if job_type.strip()]
+
+
+def build_basic_person_fields(
+    *,
+    source_record_id: str,
+    shigong_code: str,
+    person: Dict[str, str],
+) -> Dict[str, Any]:
+    return {
+        "关联施工单": [source_record_id],
+        "施工编码": shigong_code,
+        "姓名": person["name"],
+        "身份证号": person["id_number"],
+        "手机号": person["phone"],
+        "作业类型": split_job_types(person.get("job_type") or ""),
+    }
+
+
+def write_basic_person_record(
+    *,
+    feishu_client,
+    target_table_id: str,
+    source_record_id: str,
+    shigong_code: str,
+    person: Dict[str, str],
+) -> bool:
+    try:
+        fields = build_basic_person_fields(
+            source_record_id=source_record_id,
+            shigong_code=shigong_code,
+            person=person,
+        )
+        cleaned_fields = {key: value for key, value in fields.items() if value is not None}
+        new_record_id = feishu_client.create_record(fields=cleaned_fields, table_id=target_table_id)
+        if new_record_id:
+            print(f"[消息处理] ✅ 已写入人员记录: {person['name']}")
+            return True
+        print(f"[消息处理] ❌ 写入人员记录失败: {person['name']}")
+    except Exception as exc:
+        print(f"[消息处理] ❌ 写入人员记录异常: {person['name']} - {exc}")
+    return False
+
+
+def write_query_result_record(
+    *,
+    feishu_client,
+    service,
+    target_table_id: str,
+    source_record_id: str,
+    shigong_code: str,
+    person: Dict[str, str],
+    query_result,
+    download_dir: Path,
+) -> bool:
+    if query_result.status != "success" or not query_result.selected_certificates:
+        print(f"[消息处理] {person['name']}: 查询状态={query_result.status}, 跳过回写")
+        return False
+
+    try:
+        new_fields = service.build_feishu_fields(
+            query_result,
+            FIELD_MAPPING,
+            record_reference=f"{source_record_id}_{person['id_number']}",
+            save_dir=str(download_dir),
+        )
+        new_fields.update(
+            build_basic_person_fields(
+                source_record_id=source_record_id,
+                shigong_code=shigong_code,
+                person=person,
+            )
+        )
+
+        cleaned_fields = {key: value for key, value in new_fields.items() if value is not None}
+        new_record_id = feishu_client.create_record(fields=cleaned_fields, table_id=target_table_id)
+        if new_record_id:
+            print(f"[消息处理] ✅ 已创建证书记录: {person['name']}")
+            return True
+        print(f"[消息处理] ❌ 创建证书记录失败: {person['name']}")
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        print(f"[消息处理] ❌ 构建记录异常: {person['name']} - {exc}")
+    return False
+
+
+def query_person_worker(
+    *,
+    chrome_bin: Optional[str],
+    chromedriver_path: Optional[str],
+) -> None:
+    from .certificate_query import CertificateQuery, PersonQueryResult
+
+    print("[消息处理] 全局查询线程已启动")
+    query_engine = None
+
+    try:
+        while True:
+            task = _GLOBAL_QUERY_QUEUE.get()
+            context = task.context
+            person = task.person
+            try:
+                if query_engine is None:
+                    query_engine = CertificateQuery(
+                        chrome_bin=chrome_bin,
+                        chromedriver_path=chromedriver_path,
+                    )
+
+                result = query_engine.query_person(
+                    record_id=task.query_record_id,
+                    name=person["name"],
+                    id_number=person["id_number"],
+                )
+            except Exception as exc:
+                if query_engine is not None:
+                    try:
+                        query_engine.close()
+                    except Exception:
+                        pass
+                    query_engine = None
+
+                error_text = f"查询线程异常: {exc}"
+                if "Chrome 启动失败" in str(exc) or "目标站点首页未能在预期时间内就绪" in str(exc):
+                    error_text = f"查询引擎初始化失败: {exc}"
+
+                result = PersonQueryResult(
+                    record_id=task.query_record_id,
+                    name=person["name"],
+                    id_number=person["id_number"],
+                    status="fail_other",
+                    error=error_text,
+                )
+
+            print(f"[消息处理] 查询线程完成: {context.source_record_id} / {person['name']} - {result.status}")
+            _GLOBAL_WRITE_QUEUE.put(WriteTask(context=context, person=person, query_result=result))
+    finally:
+        if query_engine is not None:
+            query_engine.close()
+        print("[消息处理] 全局查询线程已结束")
+
+
+def write_record_worker() -> None:
+    print("[消息处理] 全局写入线程已启动")
+
+    while True:
+        task = _GLOBAL_WRITE_QUEUE.get()
+        context = task.context
+
+        if task.query_result is None:
+            created = write_basic_person_record(
+                feishu_client=context.feishu_client,
+                target_table_id=context.target_table_id,
+                source_record_id=context.source_record_id,
+                shigong_code=context.shigong_code,
+                person=task.person,
+            )
+        else:
+            created = write_query_result_record(
+                feishu_client=context.feishu_client,
+                service=context.service,
+                target_table_id=context.target_table_id,
+                source_record_id=context.source_record_id,
+                shigong_code=context.shigong_code,
+                person=task.person,
+                query_result=task.query_result,
+                download_dir=context.download_dir,
+            )
+
+        context.mark_write_completed(created=created)
+
+
+def ensure_global_workers_started() -> None:
+    global _workers_started
+
+    with _workers_lock:
+        if _workers_started:
+            return
+
+        query_thread = threading.Thread(
+            target=query_person_worker,
+            kwargs={
+                "chrome_bin": os.environ.get("CHROME_BIN"),
+                "chromedriver_path": os.environ.get("CHROMEDRIVER_PATH"),
+            },
+            name="global-query-worker",
+            daemon=True,
+        )
+        query_thread.start()
+
+        write_thread = threading.Thread(
+            target=write_record_worker,
+            name="global-write-worker",
+            daemon=True,
+        )
+        write_thread.start()
+
+        _workers_started = True
+        print("[消息处理] 已启动全局查询/写入工作线程")
 
 
 def process_record_message(record_id: str, feishu_client) -> None:
@@ -422,139 +714,52 @@ def process_record_message(record_id: str, feishu_client) -> None:
         print(f"[消息处理] 未解析到有效人员，退出")
         return
 
-    # 按权限分组
+    # 按作业类型分组
     perm_personnel = [p for p in all_personnel if p["has_permission"]]
     no_perm_personnel = [p for p in all_personnel if not p["has_permission"]]
     print(f"[消息处理] 共 {len(all_personnel)} 人: {len(perm_personnel)} 人需查证书, {len(no_perm_personnel)} 人直接写入")
 
-    created_count = 0
+    service = CertificateService(
+        feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},
+        max_workers=1,
+        chrome_bin=os.environ.get("CHROME_BIN"),
+        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
+    )
+    service.feishu_client = feishu_client
 
-    # === 步骤 4A：无权限人员直接写入多维表（仅基础信息） ===
+    context = RecordProcessingContext(
+        source_record_id=record_id,
+        shigong_code=shigong_code,
+        target_table_id=target_table_id,
+        download_dir=download_dir,
+        timestamp=timestamp,
+        personnel_count=len(all_personnel),
+        expected_write_tasks=len(all_personnel),
+        feishu_client=feishu_client,
+        service=service,
+    )
+
+    ensure_global_workers_started()
+    print("[消息处理] 步骤4: 主线程投递任务到全局写入/查询队列...")
+
     if no_perm_personnel:
-        print(f"[消息处理] 步骤4A: 写入 {len(no_perm_personnel)} 名普通人员...")
+        print(f"[消息处理] 投递 {len(no_perm_personnel)} 名普通人员到全局写入队列...")
         for person in no_perm_personnel:
-            try:
-                # 处理作业类型：按 / 分割
-                job_types = [jt.strip() for jt in (person.get("job_type") or "").split("/") if jt.strip()]
-                
-                basic_fields = {
-                    "关联施工单": [record_id],
-                    "施工编码": shigong_code,
-                    "姓名": person["name"],
-                    "身份证号": person["id_number"],
-                    "手机号": person["phone"],
-                    "作业类型": job_types,
-                }
-                cleaned = {k: v for k, v in basic_fields.items() if v is not None}
-                new_record_id = feishu_client.create_record(
-                    fields=cleaned,
-                    table_id=target_table_id,
-                )
-                if new_record_id:
-                    created_count += 1
-                    print(f"[消息处理] ✅ 已写入普通人员: {person['name']}")
-                else:
-                    print(f"[消息处理] ❌ 写入普通人员失败: {person['name']}")
-            except Exception as e:
-                print(f"[消息处理] ❌ 普通人员写入异常: {person['name']} - {e}")
+            _GLOBAL_WRITE_QUEUE.put(WriteTask(context=context, person=person))
 
-    # === 步骤 4B：有权限人员查询证书 ===
     if perm_personnel:
-        people_for_query = [
-            {
-                "record_id": f"msg_{record_id}_{i}",
-                "name": p["name"],
-                "id_number": p["id_number"],
-            }
-            for i, p in enumerate(perm_personnel)
-        ]
-
-        service = CertificateService(
-            feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},
-            max_workers=min(3, len(people_for_query)),
-            chrome_bin=os.environ.get("CHROME_BIN"),
-            chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
-        )
-        service.feishu_client = feishu_client
-
-        print(f"[消息处理] 步骤4B: 开始证书查询 ({len(perm_personnel)} 人)...")
-        query_results = service.run_batch(people=people_for_query)
-
-        # === 步骤 5：将证书查询结果写入飞书表 ===
-        print(f"[消息处理] 步骤5: 写入证书查询结果到飞书表 {target_table_id}...")
-
-        FIELD_MAPPING = {
-            "high_voltage": {
-                "attachment_field": "高压证",
-                "expire_field": "高压证-到期日期",
-                "review_due_field": "高压证-应复审日期",
-                "review_actual_field": "高压证-实际复审日期",
-            },
-            "low_voltage": {
-                "attachment_field": "低压证",
-                "expire_field": "低压证-到期日期",
-                "review_due_field": "低压证-应复审日期",
-                "review_actual_field": "低压证-实际复审日期",
-            },
-            "refrigeration": {
-                "attachment_field": "制冷证",
-                "expire_field": "制冷证-到期日期",
-                "review_due_field": "制冷证-应复审日期",
-                "review_actual_field": "制冷证-实际复审日期",
-            },
-            "working_at_height": {
-                "attachment_field": "登高证",
-                "expire_field": "登高证-到期日期",
-                "review_due_field": "登高证-应复审日期",
-                "review_actual_field": "登高证-实际复审日期",
-            },
-            "welding": {
-                "attachment_field": "焊接证",
-                "expire_field": "焊接证-到期日期",
-                "review_due_field": "焊接证-应复审日期",
-                "review_actual_field": "焊接证-实际复审日期",
-            },
-        }
-
-        for i, result in enumerate(query_results):
-            person = perm_personnel[i]
-
-            if result.status != "success" or not result.selected_certificates:
-                print(f"[消息处理] {person['name']}: 查询状态={result.status}, 跳过回写")
-                continue
-
-            try:
-                new_fields = service.build_feishu_fields(result, FIELD_MAPPING, save_dir=download_dir)
-
-                # 处理作业类型：按 / 分割
-                job_types = [jt.strip() for jt in (person.get("job_type") or "").split("/") if jt.strip()]
-
-                new_fields.update({
-                    "关联施工单": [record_id],
-                    "施工编码": shigong_code,
-                    "姓名": person["name"],
-                    "身份证号": person["id_number"],
-                    "手机号": person["phone"],
-                    "作业类型": job_types,
-                })
-
-                cleaned_fields = {k: v for k, v in new_fields.items() if v is not None}
-
-                new_record_id = feishu_client.create_record(
-                    fields=cleaned_fields,
-                    table_id=target_table_id,
+        print(f"[消息处理] 投递 {len(perm_personnel)} 名证书查询人员到全局查询队列...")
+        for index, person in enumerate(perm_personnel):
+            _GLOBAL_QUERY_QUEUE.put(
+                QueryTask(
+                    context=context,
+                    query_record_id=f"msg_{record_id}_{index}",
+                    person=person,
                 )
+            )
 
-                if new_record_id:
-                    created_count += 1
-                    print(f"[消息处理] ✅ 已创建证书记录: {person['name']}")
-                else:
-                    print(f"[消息处理] ❌ 创建证书记录失败: {person['name']}")
-
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                print(f"[消息处理] ❌ 构建记录异常: {person['name']} - {e}")
+    context.done_event.wait()
+    created_count = context.created_count
 
     # === 完成 ===
     print(f"\n{'#'*60}")

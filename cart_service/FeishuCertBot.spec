@@ -1,16 +1,25 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
-datas = [('.env', '.')]
-datas += collect_data_files('ddddocr')
+datas = [('.env', '.'), ('app/static', 'app/static')]
+binaries = []
+hiddenimports = []
+hiddenimports += collect_submodules('uvicorn')
+hiddenimports += collect_submodules('websockets')
+hiddenimports += collect_submodules('lark_oapi')
+tmp_ret = collect_all('ddddocr')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('onnxruntime')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['app\\server.py'],
-    pathex=[],
-    binaries=[],
+    pathex=['.'],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

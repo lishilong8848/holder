@@ -47,3 +47,4 @@ __pycache__/
 *.tmp_keep
 *.example
 
+/cart_service/FeishuCertBot.spec

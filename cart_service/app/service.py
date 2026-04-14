@@ -523,11 +523,27 @@ class CertificateService:
         cert_type: str,
         card: ExtractedCertificateCard,
     ) -> str:
+        def _sanitize_filename_part(value: str) -> str:
+            return (
+                str(value or "")
+                .strip()
+                .replace("/", "_")
+                .replace("\\", "_")
+                .replace(" ", "_")
+            )
+
         expire_text = (card.fields.get(EFFECTIVE_END_FIELD) or "").strip() or "\u672a\u77e5\u65e5\u671f"
         raw_reference = record_reference or result.record_id or result.id_number or result.name or "\u672a\u77e5\u6807\u8bc6"
-        safe_reference = raw_reference.replace("/", "_").replace("\\", "_").replace(" ", "_")
+        safe_name = _sanitize_filename_part(result.name)
+        safe_reference = _sanitize_filename_part(raw_reference)
         cert_label = CERTIFICATE_TYPE_LABELS.get(cert_type, cert_type)
-        return f"{safe_reference}_{cert_label}_{expire_text}.jpg"
+        parts = []
+        if safe_name:
+            parts.append(safe_name)
+        if safe_reference and safe_reference != safe_name:
+            parts.append(safe_reference)
+        parts.extend([cert_label, expire_text])
+        return "_".join(parts) + ".jpg"
 
     @staticmethod
     def lookup_field_names(lookup: Dict[str, Optional[str]]) -> List[str]:

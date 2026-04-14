@@ -274,6 +274,20 @@ class CertificateServiceTests(unittest.TestCase):
         self.assertEqual(fields["hv_attachment"], [])
         fake_feishu.upload_image.assert_not_called()
 
+    def test_build_certificate_filename_includes_person_name(self):
+        service, _fake_feishu = self.build_service()
+        result = build_success_result(record_id="rec_001")
+        card = result.selected_certificates["high_voltage"]
+
+        filename = service.build_certificate_filename(
+            result=result,
+            record_reference="rec_001",
+            cert_type="high_voltage",
+            card=card,
+        )
+
+        self.assertEqual(filename, "Li_Shilong_rec_001_高压证_2030-11-06.jpg")
+
     def test_process_batch_request_success_returns_counts(self):
         service, fake_feishu = self.build_service()
         fake_feishu.ensure_token.return_value = "tenant-token"

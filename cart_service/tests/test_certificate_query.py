@@ -1,6 +1,8 @@
 import unittest
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import Mock
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -115,6 +117,7 @@ class CertificateQueryUnitTests(unittest.TestCase):
             ]
         )
         query._is_history_table = lambda _table: False
+        query.capture_element_screenshot = lambda _table: b"fake-jpeg"
 
         cards = query.extract_certificate_cards()
         self.assertEqual(len(cards), 1)
@@ -150,6 +153,24 @@ class CertificateQueryUnitTests(unittest.TestCase):
         query.close()
         query.close()
         query.driver.quit.assert_called_once()
+
+    def test_get_ocr_falls_back_when_show_ad_is_unsupported(self):
+        calls = []
+
+        class FakeDdddOcr:
+            def __init__(self, *args, **kwargs):
+                calls.append(kwargs.copy())
+                if "show_ad" in kwargs:
+                    raise TypeError("DdddOcr.__init__() got an unexpected keyword argument 'show_ad'")
+
+        query = self._build_query_without_init()
+        query._ocr = None
+
+        with patch.dict("sys.modules", {"ddddocr": SimpleNamespace(DdddOcr=FakeDdddOcr)}):
+            ocr = query._get_ocr()
+
+        self.assertIsInstance(ocr, FakeDdddOcr)
+        self.assertEqual(calls, [{"show_ad": False}, {}])
 
 
 if __name__ == "__main__":
