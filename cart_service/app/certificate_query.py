@@ -54,6 +54,9 @@ CERT_TYPE_BY_OPERATION_ITEM = {
     "低压电工作业": "low_voltage",
     "制冷与空调设备运行操作作业": "refrigeration",
     "高处安装、维护、拆除作业": "working_at_height",
+    "熔化焊接与热切割作业": "welding",
+    "压力焊作业": "welding",
+    "钎焊作业": "welding",
 }
 
 

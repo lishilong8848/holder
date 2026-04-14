@@ -36,6 +36,7 @@ CERTIFICATE_TYPE_LABELS = {
     "low_voltage": "\u4f4e\u538b\u8bc1",
     "refrigeration": "\u5236\u51b7\u8bc1",
     "working_at_height": "\u767b\u9ad8\u8bc1",
+    "welding": "\u7126\u63a5\u8bc1",
 }
 
 T = TypeVar("T")

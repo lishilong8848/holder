@@ -123,8 +123,9 @@ def _find_column_indices(headers: List[str]) -> Dict[str, Optional[int]]:
 
 def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
     """
-    解析施工人员信息表 Excel，返回有操作权限的人员列表
-    每个人员: {"name": ..., "id_number": ..., "phone": ...}
+    解析施工人员信息表 Excel，返回全部人员列表
+    每个人员: {"name": ..., "id_number": ..., "phone": ..., "gender": ..., "has_permission": True/False}
+    has_permission 表示是否有特殊作业权限（需要查询证书）
     """
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
     ws = wb.active
@@ -147,11 +148,11 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
 
     personnel = []
     for row in rows[1:]:
-        # 检查操作权限（如果有该列）
+        # 检查操作权限标记
+        has_permission = False
         if col_map["permission"] is not None:
             perm_val = str(row[col_map["permission"]] or "").strip()
-            if perm_val != "是":
-                continue  # 不是“是”（即没有特殊作业权限），跳过
+            has_permission = (perm_val == "是")
 
         name = str(row[col_map["name"]] or "").strip()
         id_number = str(row[col_map["id_number"]] or "").strip()
@@ -169,10 +170,12 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
                 "id_number": id_number,
                 "phone": phone,
                 "gender": gender,
+                "has_permission": has_permission,
             })
 
     wb.close()
-    print(f"[消息处理] 解析到 {len(personnel)} 名有操作权限的人员")
+    perm_count = sum(1 for p in personnel if p["has_permission"])
+    print(f"[消息处理] 解析到 {len(personnel)} 名人员, 其中 {perm_count} 人有特殊作业权限需查证书")
     return personnel
 
 
@@ -286,107 +289,135 @@ def process_record_message(record_id: str, feishu_client) -> None:
         print(f"[消息处理] 未解析到有效人员，退出")
         return
 
-    print(f"[消息处理] 共 {len(all_personnel)} 人需要查询证书")
-
-    # === 步骤 4：查询证书 ===
-    people_for_query = [
-        {
-            "record_id": f"msg_{record_id}_{i}",
-            "name": p["name"],
-            "id_number": p["id_number"],
-        }
-        for i, p in enumerate(all_personnel)
-    ]
-
-    service = CertificateService(
-        feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},  # 填充占位符，下方立刻用外部完整的 client 接管
-        max_workers=min(3, len(people_for_query)),
-        chrome_bin=os.environ.get("CHROME_BIN"),
-        chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
-    )
-    service.feishu_client = feishu_client  # 绑定以允许上传图片附件
-
-    print(f"[消息处理] 步骤4: 开始证书查询...")
-    query_results = service.run_batch(people=people_for_query)
-
-    # === 步骤 5：将结果写入飞书表 ===
-    print(f"[消息处理] 步骤5: 写入飞书表 {TARGET_TABLE_ID}...")
-
-    FIELD_MAPPING = {
-        "high_voltage": {
-            "attachment_field": "高压证",
-            "expire_field": "高压证-到期日期",
-            "review_due_field": "高压证-应复审日期",
-            "review_actual_field": "高压证-实际复审日期",
-        },
-        "low_voltage": {
-            "attachment_field": "低压证",
-            "expire_field": "低压证-到期日期",
-            "review_due_field": "低压证-应复审日期",
-            "review_actual_field": "低压证-实际复审日期",
-        },
-        "refrigeration": {
-            "attachment_field": "制冷证",
-            "expire_field": "制冷证-到期日期",
-            "review_due_field": "制冷证-应复审日期",
-            "review_actual_field": "制冷证-实际复审日期",
-        },
-        "working_at_height": {
-            "attachment_field": "登高证",
-            "expire_field": "登高证-到期日期",
-            "review_due_field": "登高证-应复审日期",
-            "review_actual_field": "登高证-实际复审日期",
-        },
-    }
+    # 按权限分组
+    perm_personnel = [p for p in all_personnel if p["has_permission"]]
+    no_perm_personnel = [p for p in all_personnel if not p["has_permission"]]
+    print(f"[消息处理] 共 {len(all_personnel)} 人: {len(perm_personnel)} 人需查证书, {len(no_perm_personnel)} 人直接写入")
 
     created_count = 0
-    for i, result in enumerate(query_results):
-        person = all_personnel[i]
 
-        if result.status != "success" or not result.selected_certificates:
-            print(f"[消息处理] {person['name']}: 查询状态={result.status}, 跳过回写")
-            continue
+    # === 步骤 4A：无权限人员直接写入多维表（仅基础信息） ===
+    if no_perm_personnel:
+        print(f"[消息处理] 步骤4A: 写入 {len(no_perm_personnel)} 名普通人员...")
+        for person in no_perm_personnel:
+            try:
+                basic_fields = {
+                    "关联施工单": [record_id],
+                    "施工编码": shigong_code,
+                    "姓名": person["name"],
+                    "身份证号": person["id_number"],
+                    "手机号": person["phone"],
+                }
+                cleaned = {k: v for k, v in basic_fields.items() if v is not None}
+                new_record_id = feishu_client.create_record(
+                    fields=cleaned,
+                    table_id=TARGET_TABLE_ID,
+                )
+                if new_record_id:
+                    created_count += 1
+                    print(f"[消息处理] ✅ 已写入普通人员: {person['name']}")
+                else:
+                    print(f"[消息处理] ❌ 写入普通人员失败: {person['name']}")
+            except Exception as e:
+                print(f"[消息处理] ❌ 普通人员写入异常: {person['name']} - {e}")
 
-        try:
-            # 自动上传附件及拼装全部映射的证书日期
-            new_fields = service.build_feishu_fields(result, FIELD_MAPPING)
-            
-            # 加入外键与该人员的基础属性
-            new_fields.update({
-                "关联施工单": [record_id],
-                "施工编码": shigong_code,
-                "姓名": person["name"],
-                "身份证号": person["id_number"],
-                "手机号": person["phone"],
-            })
+    # === 步骤 4B：有权限人员查询证书 ===
+    if perm_personnel:
+        people_for_query = [
+            {
+                "record_id": f"msg_{record_id}_{i}",
+                "name": p["name"],
+                "id_number": p["id_number"],
+            }
+            for i, p in enumerate(perm_personnel)
+        ]
 
-            # 清理 new_fields 中所有的 None 值和空列表
-            cleaned_fields = {k: v for k, v in new_fields.items() if v is not None}
+        service = CertificateService(
+            feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},
+            max_workers=min(3, len(people_for_query)),
+            chrome_bin=os.environ.get("CHROME_BIN"),
+            chromedriver_path=os.environ.get("CHROMEDRIVER_PATH"),
+        )
+        service.feishu_client = feishu_client
 
-            # 调试：打印每个字段的类型和值
-            print(f"[消息处理] 即将提交的字段 ({person['name']}):")
-            for k, v in cleaned_fields.items():
-                print(f"  {k}: type={type(v).__name__}, value={repr(v)[:100]}")
+        print(f"[消息处理] 步骤4B: 开始证书查询 ({len(perm_personnel)} 人)...")
+        query_results = service.run_batch(people=people_for_query)
 
-            new_record_id = feishu_client.create_record(
-                fields=cleaned_fields,
-                table_id=TARGET_TABLE_ID,
-            )
+        # === 步骤 5：将证书查询结果写入飞书表 ===
+        print(f"[消息处理] 步骤5: 写入证书查询结果到飞书表 {TARGET_TABLE_ID}...")
 
-            if new_record_id:
-                created_count += 1
-                print(f"[消息处理] ✅ 已创建/更新多证合一记录: {person['name']}")
-            else:
-                print(f"[消息处理] ❌ 创建/更新多证合一记录失败: {person['name']}")
+        FIELD_MAPPING = {
+            "high_voltage": {
+                "attachment_field": "高压证",
+                "expire_field": "高压证-到期日期",
+                "review_due_field": "高压证-应复审日期",
+                "review_actual_field": "高压证-实际复审日期",
+            },
+            "low_voltage": {
+                "attachment_field": "低压证",
+                "expire_field": "低压证-到期日期",
+                "review_due_field": "低压证-应复审日期",
+                "review_actual_field": "低压证-实际复审日期",
+            },
+            "refrigeration": {
+                "attachment_field": "制冷证",
+                "expire_field": "制冷证-到期日期",
+                "review_due_field": "制冷证-应复审日期",
+                "review_actual_field": "制冷证-实际复审日期",
+            },
+            "working_at_height": {
+                "attachment_field": "登高证",
+                "expire_field": "登高证-到期日期",
+                "review_due_field": "登高证-应复审日期",
+                "review_actual_field": "登高证-实际复审日期",
+            },
+            "welding": {
+                "attachment_field": "焊接证",
+                "expire_field": "焊接证-到期日期",
+                "review_due_field": "焊接证-应复审日期",
+                "review_actual_field": "焊接证-实际复审日期",
+            },
+        }
 
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"[消息处理] ❌ 构建记录异常: {person['name']} - {e}")
+        for i, result in enumerate(query_results):
+            person = perm_personnel[i]
+
+            if result.status != "success" or not result.selected_certificates:
+                print(f"[消息处理] {person['name']}: 查询状态={result.status}, 跳过回写")
+                continue
+
+            try:
+                new_fields = service.build_feishu_fields(result, FIELD_MAPPING)
+
+                new_fields.update({
+                    "关联施工单": [record_id],
+                    "施工编码": shigong_code,
+                    "姓名": person["name"],
+                    "身份证号": person["id_number"],
+                    "手机号": person["phone"],
+                })
+
+                cleaned_fields = {k: v for k, v in new_fields.items() if v is not None}
+
+                new_record_id = feishu_client.create_record(
+                    fields=cleaned_fields,
+                    table_id=TARGET_TABLE_ID,
+                )
+
+                if new_record_id:
+                    created_count += 1
+                    print(f"[消息处理] ✅ 已创建证书记录: {person['name']}")
+                else:
+                    print(f"[消息处理] ❌ 创建证书记录失败: {person['name']}")
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"[消息处理] ❌ 构建记录异常: {person['name']} - {e}")
 
     # === 完成 ===
     print(f"\n{'#'*60}")
-    print(f"[消息处理] 处理完成! 共创建 {created_count} 条记录")
+    print(f"[消息处理] 处理完成! 共创建 {created_count} 条记录 (普通人员 {len(no_perm_personnel)} + 证书人员 {len(perm_personnel)})")
     print(f"[消息处理] 附件保存目录: {download_dir}")
     print(f"{'#'*60}\n")
 
