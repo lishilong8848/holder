@@ -2,6 +2,14 @@ import asyncio
 import logging
 import os
 import sys
+
+# === 紧急修复：解决 onnxruntime 在 Windows 上的导入挂起问题 ===
+os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
+os.environ["OMP_NUM_THREADS"] = "1"
+# =========================================================
+
+print("\n🚀 [系统准备] 正在加载服务核心组件，请稍候...", flush=True)
+
 import uuid
 from pathlib import Path
 import sys
@@ -57,7 +65,7 @@ except ImportError:
     )
 
 
-MAX_BATCH_SIZE = 50  # 提升并发后的批量上限
+MAX_BATCH_SIZE = 20
 DEFAULT_CONCURRENCY = int(os.environ.get("DEFAULT_CONCURRENCY", 3))
 REQUEST_VALIDATION_DETAIL = "请求参数不合法"
 
@@ -110,11 +118,71 @@ def _message_callback(msg: dict) -> None:
 @app.on_event("startup")
 async def startup_feishu_listener():
     """服务启动时自动初始化飞书群消息监听器"""
+    if "pytest" in sys.modules:
+        logger.info("检测到 pytest 环境，跳过飞书群消息监听")
+        return
+
     started = create_listener_from_env(on_message=_message_callback)
     if started:
         logger.info("飞书群消息监听器已集成到服务")
     else:
         logger.info("未配置飞书监听环境变量，跳过群消息监听")
+
+
+class TriggerRequest(BaseModel):
+    record_id: str
+    token: Optional[str] = None  # 可选的简单鉴权 token
+
+
+@app.post("/api/trigger", summary="飞书多维表格自动化直接触发接口")
+async def trigger_by_record_id(req: TriggerRequest):
+    """
+    供飞书多维表格自动化（HTTP请求节点）直接调用。
+    无需解析群消息卡片，直接传入 record_id 触发证书查询回填流程。
+    调用示例：POST http://your-server:58000/api/trigger
+    Body: {"record_id": "recvgJe0RmBmIM"}
+    """
+    record_id = req.record_id.strip()
+    if not record_id.startswith("rec"):
+        raise HTTPException(status_code=400, detail="record_id 格式不正确，应以 rec 开头")
+
+    # 初始化 feishu client（复用已有逻辑）
+    global _feishu_handler_client
+    if _feishu_handler_client is None:
+        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
+        app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
+        app_token = os.environ.get("FEISHU_APP_TOKEN", "").strip()
+        table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
+        if app_id and app_secret:
+            try:
+                from .feishu_reader import FeishuTableReader
+            except ImportError:
+                from app.feishu_reader import FeishuTableReader
+            _feishu_handler_client = FeishuTableReader(
+                app_id=app_id, app_secret=app_secret,
+                app_token=app_token, table_id=table_id,
+            )
+
+    if not _feishu_handler_client:
+        raise HTTPException(status_code=500, detail="飞书客户端未初始化，请检查环境变量配置")
+
+    try:
+        from .message_handler import process_record_message
+    except ImportError:
+        from app.message_handler import process_record_message
+
+    import threading
+    def _run():
+        try:
+            process_record_message(record_id, _feishu_handler_client)
+        except Exception as e:
+            logger.error(f"[API触发] 处理记录 {record_id} 失败: {e}")
+
+    thread = threading.Thread(target=_run, name=f"api-trigger-{record_id}", daemon=True)
+    thread.start()
+    logger.info(f"[API触发] 已异步启动记录 {record_id} 的处理任务")
+
+    return {"status": "accepted", "record_id": record_id, "message": "任务已接受，正在后台处理"}
 
 
 class FeishuConfigRequest(BaseModel):
@@ -323,7 +391,7 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
     )
 
     try:
-        query_results = await REQUEST_COORDINATOR.run(
+        queued_result = await REQUEST_COORDINATOR.run(
             request_id=request_id,
             work=lambda: asyncio.to_thread(
                 service.process_batch_request,
@@ -349,48 +417,12 @@ async def batch_query(request: Request, payload: BatchQueryRequest):
         logger.error(f"批量查询引擎故障: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"批量查询引擎故障: {exc}")
 
-    # 2. 批量回填
-    response_results: List[ResultItem] = []
-    success_count = 0
-    
-    for result in query_results:
-        writeback_error: Optional[str] = None
-        person_success = False
-        
-        if result.status == "success":
-            try:
-                # 构造回填字段并执行更新
-                fields = service.build_feishu_fields(result, field_mapping)
-                if service.feishu_client.update_record(result.record_id, fields):
-                    person_success = True
-                else:
-                    writeback_error = "飞书接口更新失败"
-            except Exception as e:
-                logger.warning(f"记录 {result.record_id} 回填异常: {e}")
-                writeback_error = str(e)
-        else:
-            writeback_error = "查询未成功，跳过回填"
-
-        if person_success:
-            success_count += 1
-
-        item = ResultItem(
-            record_id=result.record_id,
-            success=person_success,
-        )
-        if request.debug:
-            item.query_status = result.status
-            item.query_error = result.error
-            item.writeback_error = writeback_error
-            
-        response_results.append(item)
-
-    failed_count = len(response_results) - success_count
+    batch_result = queued_result.result
     return BatchQueryResponse(
-        total=len(response_results),
-        success=success_count,
-        failed=failed_count,
-        results=response_results,
+        total=batch_result.total,
+        success=batch_result.success,
+        failed=batch_result.failed,
+        results=build_response(batch_result.results),
     )
 
 

@@ -13,7 +13,7 @@ from PIL import Image
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.LANCZOS
 
-import ddddocr
+# import ddddocr  <-- 移至下方延迟加载，防止 Python 3.13 导入挂起
 from selenium import webdriver
 from selenium.common.exceptions import NoAlertPresentException, TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service as ChromeService
@@ -105,8 +105,15 @@ class CertificateQuery:
         self.driver.implicitly_wait(0)
         self.page_wait = WebDriverWait(self.driver, self.page_timeout)
         self.query_wait = WebDriverWait(self.driver, self.query_timeout)
-        self.ocr = ddddocr.DdddOcr()
+        self._ocr = None
         self._service_process = getattr(getattr(self.driver, "service", None), "process", None)
+
+    def _get_ocr(self):
+        """延迟加载 ddddocr，防止导入阶段挂起"""
+        if self._ocr is None:
+            import ddddocr
+            self._ocr = ddddocr.DdddOcr(show_ad=False)
+        return self._ocr
 
     def __enter__(self):
         return self
@@ -283,7 +290,7 @@ class CertificateQuery:
     def recognize_and_input_captcha(self) -> Optional[str]:
         captcha_image = self.page_wait.until(EC.presence_of_element_located((By.XPATH, CAPTCHA_IMAGE_XPATH)))
         captcha_bytes = captcha_image.screenshot_as_png
-        captcha_text = re.sub(r"[^0-9A-Za-z]", "", self.ocr.classification(captcha_bytes).strip())
+        captcha_text = re.sub(r"[^0-9A-Za-z]", "", self._get_ocr().classification(captcha_bytes).strip())
         if len(captcha_text) < 4:
             return None
 

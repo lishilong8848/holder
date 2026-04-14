@@ -6,9 +6,11 @@
 2. 定时轮询：通过 API 获取群消息记录，可以获取机器人消息。
 """
 
+import concurrent.futures
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Set
@@ -16,6 +18,7 @@ from typing import Callable, Dict, List, Optional, Set
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
     GetChatRequest,
+    GetMessageRequest,
     ListChatRequest,
     ListMessageRequest,
     P2ImMessageReceiveV1,
@@ -34,6 +37,10 @@ _user_callback: Optional[Callable] = None
 _processed_msg_ids: Set[str] = set()
 _max_cached_ids = 200
 _poll_interval = 5  # 轮询间隔 (秒)
+_card_log_limit = int(os.environ.get("FEISHU_CARD_LOG_LIMIT", "2000"))
+_message_sort_desc = "ByCreateTimeDesc"
+_preload_page_size = 50
+_latest_page_size = 1
 
 
 def _get_chat_name(chat_id: str) -> Optional[str]:
@@ -83,6 +90,9 @@ def _handle_common_logic(msg_data: Dict) -> None:
     print(f"   类型: {msg_data['msg_type']}")
     print(f"   发送者: {msg_data['sender_id']}")
     print(f"   内容: {msg_data['display_text'][:500]}")
+    if msg_data.get("msg_type") == "interactive" and msg_data.get("content_raw"):
+        raw_content = str(msg_data.get("content_raw") or "")
+        print(f"   卡片载荷: {raw_content[:_card_log_limit]}")
     print(f"{'='*60}\n")
 
     # 调用外部回调
@@ -139,6 +149,7 @@ def _on_message(data: P2ImMessageReceiveV1) -> None:
             "sender_id": sender_id,
             "content": content,
             "display_text": display_text,
+            "content_raw": content_raw,
             "create_time": message.create_time or "",
         }
 
@@ -173,6 +184,26 @@ def _find_monitored_chat_ids() -> List[str]:
     return matched_ids
 
 
+def _build_message_list_request(
+    chat_id: str,
+    *,
+    page_size: int,
+    sort_type: str = _message_sort_desc,
+    page_token: Optional[str] = None,
+) -> ListMessageRequest:
+    builder = (
+        ListMessageRequest.builder()
+        .container_id_type("chat")
+        .container_id(chat_id)
+        .page_size(page_size)
+    )
+    if sort_type:
+        builder = builder.sort_type(sort_type)
+    if page_token:
+        builder = builder.page_token(page_token)
+    return builder.build()
+
+
 def _poll_loop():
     """消息轮询线程主循环"""
     print("[飞书监听] 消息轮询线程正在初始化...")
@@ -183,7 +214,7 @@ def _poll_loop():
     
     for cid in monitored_ids:
         try:
-            req = ListMessageRequest.builder().container_id_type("chat").container_id(cid).page_size(10).build()
+            req = _build_message_list_request(cid, page_size=_preload_page_size)
             res = _rest_client.im.v1.message.list(req)
             if res.success() and res.data and res.data.items:
                 print(f"[飞书监听] 群 [{cid}] 预加载了 {len(res.data.items)} 条历史消息 ID")
@@ -206,12 +237,7 @@ def _poll_loop():
             for cid in monitored_ids:
                 chat_name = _chat_name_cache.get(cid, cid)
                 
-                # 移除 start_time 避免 230001 错误，改用足够大的 page_size 配合 items[-1] 获取最新
-                req = ListMessageRequest.builder() \
-                    .container_id_type("chat") \
-                    .container_id(cid) \
-                    .page_size(50) \
-                    .build()
+                req = _build_message_list_request(cid, page_size=_latest_page_size)
                 res = _rest_client.im.v1.message.list(req)
                 
                 if not res.success():
@@ -219,89 +245,105 @@ def _poll_loop():
                     continue
 
                 if res.data and res.data.items:
-                    # 获取列表最后一条，即最新的消息
-                    item = res.data.items[-1]
+                    item = res.data.items[0]
                     
                     is_new = item.message_id not in _processed_msg_ids
                     sender_type = item.sender.sender_type if item.sender else "sys"
-                    
-                    # 消息内容解析
                     content_raw = item.body.content if (item.body and item.body.content) else "{}"
-                    display_text = ""
-                    card_title = ""
-                    try:
-                        content = json.loads(content_raw)
-                        if item.msg_type == "interactive":
-                            card_title = content.get("title", "")
-                            elements_text = []
-                            elements = content.get("elements", [])
-                            for row in elements:
-                                if isinstance(row, list):
-                                    for el in row:
-                                        if isinstance(el, dict) and el.get("tag") == "text":
-                                            elements_text.append(el.get("text", ""))
-                            display_text = " | ".join(elements_text) if elements_text else "<富文本卡片>"
-                        else:
-                            display_text = content.get("text", content_raw)
-                    except:
-                        display_text = str(content_raw)
                     
-                    if "template" in display_text and sender_type == "sys":
-                        display_text = "<系统通知>"
+                    # 判断是否过期（超过 5 分钟）
+                    is_expired = False
+                    try:
+                        msg_time_ms = int(item.create_time)
+                        now_ms = int(time.time() * 1000)
+                        if now_ms - msg_time_ms > 300000:  # 5分钟
+                            is_expired = True
+                    except Exception:
+                        pass
 
-                    print(f"\n{'='*50}")
-                    print(f"🕒 [飞书轮询] {chat_name} 最新动态")
-                    status_tag = "🚀 [NEW MESSAGE]" if is_new else "🔹 [WATCHING]"
-                    print(f"状态: {status_tag}")
-                    print(f"类型: {item.msg_type} ({sender_type})")
-                    if card_title:
-                        print(f"标题: {card_title}")
-                    print(f"内容: {display_text.strip()}")
-                    print(f"{'='*50}\n")
+                    # 输出日志（所有消息都打）
+                    print(f"\n{'='*50}", flush=True)
+                    print(f"🕒 [飞书轮询] {chat_name} 最新动态", flush=True)
+                    status_tag = "🚀 [NEW]" if is_new else "🔹 [WATCHING]"
+                    if is_expired: status_tag += " (已过期)"
+                    print(f"状态: {status_tag} | ID: {item.message_id}", flush=True)
+                    print(f"类型: {item.msg_type} ({sender_type})", flush=True)
+                    print(f"原始内容预览: {content_raw[:150]}", flush=True)
+                    print(f"{'='*50}\n", flush=True)
 
-                    if is_new:
-                        _processed_msg_ids.add(item.message_id)
-                        
-                        # 判断是否超过 30 秒（老消息作废，防冷启动旧图）
-                        try:
-                            msg_time_ms = int(item.create_time)
-                            now_ms = int(time.time() * 1000)
-                            if now_ms - msg_time_ms > 30000:
-                                print(f"[飞书轮询] 忽略过期历史消息 (距今 {(now_ms - msg_time_ms)//1000} 秒前)")
-                                continue
-                        except Exception:
-                            pass
+                    if not is_new or is_expired:
+                        if is_expired and is_new:
+                            _processed_msg_ids.add(item.message_id)
+                            print(f"[飞书轮询] 跳过过期消息", flush=True)
+                        continue
 
-                        content_json = {}
-                        try:
-                            content_json = json.loads(content_raw)
-                        except:
-                            content_json = {"text": content_raw}
+                    # 标记已处理
+                    _processed_msg_ids.add(item.message_id)
 
-                        sender_id = ""
-                        if item.sender and item.sender.id:
-                            sender_id = item.sender.id
-
-                        msg_data = {
-                            "message_id": item.message_id,
-                            "chat_id": cid,
-                            "chat_name": chat_name,
-                            "chat_type": "group",
-                            "msg_type": item.msg_type,
-                            "sender_type": sender_type,
-                            "sender_id": sender_id,
-                            "content": content_json,
-                            "display_text": display_text,
-                            "create_time": item.create_time,
-                        }
-                        
-                        if _user_callback:
+                    # 对 interactive 卡片用 message.get 拉取完整内容（加超时保护防挂起）
+                    if item.msg_type == "interactive":
+                        def _fetch_detail(msg_id):
                             try:
-                                _user_callback(msg_data)
-                            except Exception as e:
-                                print(f"[飞书轮询] 回调分发异常: {e}")
+                                req = GetMessageRequest.builder().message_id(msg_id).build()
+                                resp = _rest_client.im.v1.message.get(req)
+                                if resp.success() and resp.data and resp.data.items:
+                                    return resp.data.items[0].body.content
+                            except Exception as ex:
+                                print(f"[飞书轮询] 详情接口异常: {ex}", flush=True)
+                            return None
+
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                            future = executor.submit(_fetch_detail, item.message_id)
+                            try:
+                                detail_body = future.result(timeout=5)
+                                if detail_body:
+                                    content_raw = detail_body
+                                    print(f"[飞书轮询] 卡片详情获取成功", flush=True)
+                                else:
+                                    print(f"[飞书轮询] 详情接口无内容，使用原始内容", flush=True)
+                            except concurrent.futures.TimeoutError:
+                                print(f"[飞书轮询] 详情接口超时(5s)，使用原始内容继续", flush=True)
+
+                    # 尝试解析 JSON
+                    content_json = {}
+                    try:
+                        content_json = json.loads(content_raw)
+                    except Exception:
+                        content_json = {"text": content_raw}
+
+                    # 提取显示文本
+                    display_text = content_raw  # 默认直接用原文本，确保不丢任何信息
+                    if item.msg_type != "interactive":
+                        display_text = content_json.get("text", content_raw)
+
+                    sender_id = ""
+                    if item.sender and item.sender.id:
+                        sender_id = item.sender.id
+
+                    msg_data = {
+                        "message_id": item.message_id,
+                        "chat_id": cid,
+                        "chat_name": chat_name,
+                        "chat_type": "group",
+                        "msg_type": item.msg_type,
+                        "sender_type": sender_type,
+                        "sender_id": sender_id,
+                        "content": content_json,
+                        "display_text": display_text,
+                        "content_raw": content_raw,  # 传递原始内容，下游可直接使用 re 搜寽
+                        "create_time": item.create_time,
+                    }
+
+                    if item.msg_type == "interactive":
+                        print(f"[飞书轮询] 卡片完整载荷预览: {content_raw[:_card_log_limit]}", flush=True)
+                    
+                    if _user_callback:
+                        try:
+                            _user_callback(msg_data)
+                        except Exception as e:
+                            print(f"[飞书轮询] 回调分发异常: {e}", flush=True)
         except Exception as e:
-            print(f"[飞书监听] 轮询周期异常: {e}")
+            print(f"[飞书监听] 轮询周期异常: {e}", flush=True)
 
 
 def start_listener(

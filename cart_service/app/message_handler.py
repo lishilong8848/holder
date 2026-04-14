@@ -14,17 +14,18 @@ import os
 import re
 import logging
 import threading
+import ast
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import openpyxl
 
 logger = logging.getLogger(__name__)
 
 # 飞书表配置
-SOURCE_TABLE_ID = "tblWHIbp172MNjM1"    # 施工单所在表
-TARGET_TABLE_ID = "tblgJT6SXjjw7iYN"    # 证书查询结果写入表
+DEFAULT_SOURCE_TABLE_ID = "tblWHIbp172MNjM1"    # 施工单所在表
+DEFAULT_TARGET_TABLE_ID = "tblgJT6SXjjw7iYN"    # 证书查询结果写入表
 
 # 模糊匹配标题关键词
 NAME_KEYWORDS = ["姓名", "名字"]
@@ -32,6 +33,7 @@ ID_KEYWORDS = ["证件号码", "身份证号"]
 PHONE_KEYWORDS = ["手机", "联系方式", "手机号"]
 PERMISSION_KEYWORDS = ["特殊作业", "作业权限", "是否有特殊", "特殊作业权限"]
 GENDER_KEYWORDS = ["性别"]
+JOB_TYPE_KEYWORDS = ["作业类型"]
 
 # 证书类型映射（从证书系统查询结果到中文名）
 CERT_TYPE_DISPLAY = {
@@ -41,50 +43,167 @@ CERT_TYPE_DISPLAY = {
     "working_at_height": "高处安装、维护、拆除作业",
 }
 
+RECORD_ID_LABEL_PATTERN = re.compile(
+    r"(?:记录\s*ID|record[\s_-]*id)\s*[=＝:：]?\s*(rec[a-zA-Z0-9]{6,40})",
+    re.IGNORECASE,
+)
+RECORD_ID_FALLBACK_PATTERN = re.compile(r"\b(rec[a-zA-Z0-9]{6,40})\b")
+DEGRADED_CARD_HINT = "请升级至最新版本客户端，以查看内容"
+
+
+def get_source_table_id() -> str:
+    return os.environ.get("FEISHU_TABLE_ID", DEFAULT_SOURCE_TABLE_ID).strip() or DEFAULT_SOURCE_TABLE_ID
+
+
+def get_target_table_id() -> str:
+    return os.environ.get("FEISHU_TARGET_TABLE_ID", DEFAULT_TARGET_TABLE_ID).strip() or DEFAULT_TARGET_TABLE_ID
+
+
+def _looks_like_structured_string(value: str) -> bool:
+    text = value.strip()
+    return bool(text) and text[0] in "[{" and text[-1] in "]}"
+
+
+def _collect_text_fragments(value: Any, seen: Optional[Set[int]] = None) -> List[str]:
+    """
+    递归收集消息中所有可能包含记录 ID 的文本片段。
+    同时兼容 JSON 字符串、字符串化 dict/list，以及普通嵌套结构。
+    """
+    if seen is None:
+        seen = set()
+
+    fragments: List[str] = []
+
+    if value is None:
+        return fragments
+
+    if isinstance(value, (str, bytes, bytearray)):
+        text = value.decode("utf-8", errors="ignore") if isinstance(value, (bytes, bytearray)) else value
+        if text:
+            fragments.append(text)
+            structured_text = text.strip()
+            if structured_text and _looks_like_structured_string(structured_text):
+                for loader in (json.loads, ast.literal_eval):
+                    try:
+                        parsed = loader(structured_text)
+                    except Exception:
+                        continue
+                    fragments.extend(_collect_text_fragments(parsed, seen))
+                    break
+        return fragments
+
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+
+    obj_id = id(value)
+    if obj_id in seen:
+        return fragments
+    seen.add(obj_id)
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            fragments.extend(_collect_text_fragments(key, seen))
+            fragments.extend(_collect_text_fragments(item, seen))
+        return fragments
+
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            fragments.extend(_collect_text_fragments(item, seen))
+        return fragments
+
+    return [str(value)]
+
+
+def _normalize_search_text(parts: List[str]) -> str:
+    text = " ".join(part for part in parts if part)
+    text = re.sub(r"[\u200b-\u200d\ufeff]", "", text)
+    text = text.replace("\\n", "\n").replace("\\r", "\r")
+    return text
+
+
+def _is_degraded_interactive_card(msg_data: Dict[str, Any], full_text: str) -> bool:
+    if (msg_data.get("msg_type") or "").strip() != "interactive":
+        return False
+    return DEGRADED_CARD_HINT in full_text
+
+
+def _extract_card_title_text(msg_data: Dict[str, Any]) -> str:
+    content = msg_data.get("content")
+    if isinstance(content, dict):
+        title = str(content.get("title") or "").strip()
+        if title:
+            return title
+
+    content_raw = msg_data.get("content_raw")
+    if isinstance(content_raw, str) and content_raw.strip():
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                parsed = loader(content_raw)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                title = str(parsed.get("title") or "").strip()
+                if title:
+                    return title
+            break
+
+    return ""
+
 
 def extract_record_id(msg_data: Dict[str, Any]) -> Optional[str]:
     """
     从消息内容中提取 记录ID。
-    支持：
-    1. 文本中的 "记录ID=recXXX"
-    2. 文本中直接出现的 "recXXX"
-    3. 卡片消息 (interactive) 的 title 或 content
+    策略：直接在所有可能的字符串内容上跑正则，不依赖 JSON 解析结构。
     """
-    content_json = msg_data.get("content", {})
-    msg_type = msg_data.get("msg_type", "")
-    
-    # 待搜索的所有文本源
-    text_sources = []
-    
-    if msg_type == "interactive":
-        # 飞书消息卡片
-        title = content_json.get("title", "")
-        text_sources.append(str(title))
-        # 尝试从 elements 中提取 text 
-        elements = content_json.get("elements", [])
-        for row in elements:
-            if isinstance(row, list):
-                for item in row:
-                    if isinstance(item, dict) and item.get("tag") == "text":
-                        text_sources.append(str(item.get("text", "")))
-    else:
-        # 普通文本
-        text_sources.append(msg_data.get("display_text", ""))
-        text_sources.append(content_json.get("text", ""))
+    priority_parts = _collect_text_fragments(
+        {
+            "content_raw": msg_data.get("content_raw", ""),
+            "display_text": msg_data.get("display_text", ""),
+            "content": msg_data.get("content", ""),
+        }
+    )
+    full_parts = priority_parts + _collect_text_fragments(msg_data)
+    full_text = _normalize_search_text(full_parts)
+    title_text = _extract_card_title_text(msg_data)
 
-    combined_text = " ".join(text_sources)
-    
-    # 优先匹配 "记录ID=recXXXX"
-    match_explicit = re.search(r"记录ID[=＝]\s*(rec[a-zA-Z0-9]+)", combined_text)
-    if match_explicit:
-        return match_explicit.group(1).strip()
-    
-    # 其次匹配任意出现的 "recXXXX" (通常是 14 位左右)
-    match_direct = re.search(r"\b(rec[a-zA-Z0-9]{10,25})\b", combined_text)
-    if match_direct:
-        return match_direct.group(1).strip()
-        
+    if title_text:
+        title_match = RECORD_ID_LABEL_PATTERN.search(title_text) or RECORD_ID_FALLBACK_PATTERN.search(title_text)
+        if title_match:
+            rec_id = title_match.group(1).strip()
+            print(f"[消息处理] 从卡片标题中提取到记录ID: {rec_id}", flush=True)
+            return rec_id
+
+    m = RECORD_ID_LABEL_PATTERN.search(full_text)
+    if m:
+        rec_id = m.group(1).strip()
+        print(f"[消息处理] 从消息中提取到记录ID: {rec_id}", flush=True)
+        return rec_id
+
+    m2 = RECORD_ID_FALLBACK_PATTERN.search(full_text)
+    if m2:
+        rec_id = m2.group(1).strip()
+        print(f"[消息处理] 从消息中匹配到疑似记录ID: {rec_id}", flush=True)
+        return rec_id
+
+    if _is_degraded_interactive_card(msg_data, full_text):
+        title = ""
+        content = msg_data.get("content")
+        if isinstance(content, dict):
+            title = str(content.get("title") or "").strip()
+        title = title or "未知卡片"
+        print(
+            (
+                f"[消息处理] 卡片《{title}》未返回原始业务载荷，当前仅收到降级占位内容。"
+                "这类飞书卡片无法从群消息接口恢复 record_id，请改为在多维表格自动化中直接调用 "
+                "POST /api/trigger 并传入 record_id。"
+            ),
+            flush=True,
+        )
+        return None
+
+    print(f"[消息处理] 未找到记录ID，消息预览: {full_text[:200]}", flush=True)
     return None
+
 
 
 def _fuzzy_match_column(header: str, keywords: List[str]) -> bool:
@@ -101,6 +220,7 @@ def _find_column_indices(headers: List[str]) -> Dict[str, Optional[int]]:
         "phone": None,
         "permission": None,
         "gender": None,
+        "job_type": None,
     }
 
     for i, header in enumerate(headers):
@@ -113,6 +233,10 @@ def _find_column_indices(headers: List[str]) -> Dict[str, Optional[int]]:
             mapping["id_number"] = i
         elif mapping["phone"] is None and _fuzzy_match_column(h, PHONE_KEYWORDS):
             mapping["phone"] = i
+        elif mapping["gender"] is None and _fuzzy_match_column(h, GENDER_KEYWORDS):
+            mapping["gender"] = i
+        elif mapping["job_type"] is None and _fuzzy_match_column(h, JOB_TYPE_KEYWORDS):
+            mapping["job_type"] = i
         elif mapping["permission"] is None and _fuzzy_match_column(h, PERMISSION_KEYWORDS):
             mapping["permission"] = i
         elif mapping["gender"] is None and _fuzzy_match_column(h, GENDER_KEYWORDS):
@@ -164,12 +288,17 @@ def parse_excel_for_personnel(file_path: str) -> List[Dict[str, str]]:
         if col_map["gender"] is not None:
             gender = str(row[col_map["gender"]] or "").strip()
 
+        job_type_raw = ""
+        if col_map["job_type"] is not None:
+            job_type_raw = str(row[col_map["job_type"]] or "").strip()
+
         if name and id_number:
             personnel.append({
                 "name": name,
                 "id_number": id_number,
                 "phone": phone,
                 "gender": gender,
+                "job_type": job_type_raw,
                 "has_permission": has_permission,
             })
 
@@ -191,14 +320,18 @@ def process_record_message(record_id: str, feishu_client) -> None:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     project_root = Path(__file__).resolve().parents[1]
+    source_table_id = get_source_table_id()
+    target_table_id = get_target_table_id()
 
     print(f"\n{'#'*60}")
     print(f"[消息处理] 开始处理记录: {record_id}")
     print(f"{'#'*60}")
+    print(f"[消息处理] 源表ID: {source_table_id}")
+    print(f"[消息处理] 回填表ID: {target_table_id}")
 
     # === 步骤 1：获取飞书记录 ===
     print(f"[消息处理] 步骤1: 查询飞书记录...")
-    fields = feishu_client.get_record(record_id, table_id=SOURCE_TABLE_ID)
+    fields = feishu_client.get_record(record_id, table_id=source_table_id)
     if not fields:
         print(f"[消息处理] 未找到记录 {record_id}，退出")
         return
@@ -249,7 +382,7 @@ def process_record_message(record_id: str, feishu_client) -> None:
 
             file_bytes = feishu_client.download_media(
                 file_token=file_token,
-                table_id=SOURCE_TABLE_ID,
+                table_id=source_table_id,
                 record_id=record_id,
                 field_id_or_name=field_name,
                 direct_url=direct_url
@@ -301,17 +434,21 @@ def process_record_message(record_id: str, feishu_client) -> None:
         print(f"[消息处理] 步骤4A: 写入 {len(no_perm_personnel)} 名普通人员...")
         for person in no_perm_personnel:
             try:
+                # 处理作业类型：按 / 分割
+                job_types = [jt.strip() for jt in (person.get("job_type") or "").split("/") if jt.strip()]
+                
                 basic_fields = {
                     "关联施工单": [record_id],
                     "施工编码": shigong_code,
                     "姓名": person["name"],
                     "身份证号": person["id_number"],
                     "手机号": person["phone"],
+                    "作业类型": job_types,
                 }
                 cleaned = {k: v for k, v in basic_fields.items() if v is not None}
                 new_record_id = feishu_client.create_record(
                     fields=cleaned,
-                    table_id=TARGET_TABLE_ID,
+                    table_id=target_table_id,
                 )
                 if new_record_id:
                     created_count += 1
@@ -344,7 +481,7 @@ def process_record_message(record_id: str, feishu_client) -> None:
         query_results = service.run_batch(people=people_for_query)
 
         # === 步骤 5：将证书查询结果写入飞书表 ===
-        print(f"[消息处理] 步骤5: 写入证书查询结果到飞书表 {TARGET_TABLE_ID}...")
+        print(f"[消息处理] 步骤5: 写入证书查询结果到飞书表 {target_table_id}...")
 
         FIELD_MAPPING = {
             "high_voltage": {
@@ -387,7 +524,10 @@ def process_record_message(record_id: str, feishu_client) -> None:
                 continue
 
             try:
-                new_fields = service.build_feishu_fields(result, FIELD_MAPPING)
+                new_fields = service.build_feishu_fields(result, FIELD_MAPPING, save_dir=download_dir)
+
+                # 处理作业类型：按 / 分割
+                job_types = [jt.strip() for jt in (person.get("job_type") or "").split("/") if jt.strip()]
 
                 new_fields.update({
                     "关联施工单": [record_id],
@@ -395,13 +535,14 @@ def process_record_message(record_id: str, feishu_client) -> None:
                     "姓名": person["name"],
                     "身份证号": person["id_number"],
                     "手机号": person["phone"],
+                    "作业类型": job_types,
                 })
 
                 cleaned_fields = {k: v for k, v in new_fields.items() if v is not None}
 
                 new_record_id = feishu_client.create_record(
                     fields=cleaned_fields,
-                    table_id=TARGET_TABLE_ID,
+                    table_id=target_table_id,
                 )
 
                 if new_record_id:

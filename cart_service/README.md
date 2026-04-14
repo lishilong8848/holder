@@ -43,6 +43,9 @@ docker run -d -p 58000:58000 --name cert-service cert-service
 - `CHROME_BIN`
 - `CHROMEDRIVER_PATH`
 - 可选的默认飞书配置 `FEISHU_*`
+- 群消息模式下：
+  - `FEISHU_TABLE_ID`：施工单源表
+  - `FEISHU_TARGET_TABLE_ID`：证书结果回填表
 
 ## 接口说明
 

@@ -1,3 +1,4 @@
+cart_service/FeishuCertBot.spec
 # Build outputs
 /dist/
 /build/
@@ -44,23 +45,5 @@ __pycache__/
 *.tmp
 *.bak
 *.tmp_keep
+*.example
 
-# Project-specific backup and recovery files
-/表格计算部分代码.cpython-*.py
-/表格计算部分代码.py.corrupted_*.bak
-/表格计算部分代码.py.extracted_from_pkg.bak
-/表格计算部分代码.py.pass2.bak
-/表格计算部分代码.py.recovered.tmp_keep
-/表格计算部分代码.py.recovered.uncompyle6.tmp_keep
-/表格计算部分代码.py.syntaxfix.bak
-/表格计算配置.backup.*.json
-/表格计算配置.json.*.bak
-
-# Existing local-only project artifacts
-/docs/
-/全景平台月报自动定时上传.spec
-tests/
-!tests/
-!tests/unit/
-!tests/unit/test_handover_shift_interval_filters.py
-!tests/unit/test_settings_loader_handover_shift_fields.py

@@ -3,6 +3,7 @@ import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Deque, Dict, Generic, List, Optional, TypeVar
 from concurrent.futures import ThreadPoolExecutor
 
@@ -285,10 +286,169 @@ class CertificateService:
                 
         return {"success": success_count, "failed": failed_count}
 
+    def run_batch_query(self, people: List[Dict[str, str]]) -> List[PersonQueryResult]:
+        """使用单个浏览器会话执行批量查询，便于统一编排与测试替身。"""
+        with CertificateQuery(
+            chrome_bin=self.chrome_bin,
+            chromedriver_path=self.chromedriver_path,
+        ) as query:
+            return query.run_batch_query(people)
+
+    def resolve_record_targets(
+        self,
+        *,
+        people: List[Dict[str, str]],
+        lookup: Optional[Dict[str, Optional[str]]],
+    ) -> tuple[List[str], List[Optional[str]]]:
+        resolved_record_ids = [str(person.get("record_id") or "").strip() for person in people]
+        errors: List[Optional[str]] = [None] * len(people)
+
+        missing_indices = [index for index, record_id in enumerate(resolved_record_ids) if not record_id]
+        if not missing_indices:
+            return resolved_record_ids, errors
+
+        if lookup is None:
+            for index in missing_indices:
+                errors[index] = LOOKUP_REQUIRED_MESSAGE
+            return resolved_record_ids, errors
+
+        records = self.feishu_client.list_records(field_names=self.lookup_field_names(lookup))
+        index_map = self.build_lookup_index(records=records, lookup=lookup)
+        use_name = bool(lookup.get("name_field"))
+
+        for index in missing_indices:
+            person = people[index]
+            lookup_key = self.lookup_key(
+                name=person.get("name", ""),
+                id_number=person.get("id_number", ""),
+                use_name=use_name,
+            )
+            matched_record_ids = index_map.get(lookup_key, [])
+
+            if len(matched_record_ids) == 1:
+                resolved_record_ids[index] = matched_record_ids[0]
+            elif not matched_record_ids:
+                errors[index] = LOOKUP_NOT_FOUND_MESSAGE
+            else:
+                errors[index] = LOOKUP_MULTIPLE_MESSAGE
+
+        return resolved_record_ids, errors
+
+    def process_batch_request(
+        self,
+        *,
+        request_id: str,
+        people: List[Dict[str, str]],
+        lookup: Optional[Dict[str, Optional[str]]],
+        field_mapping: Dict[str, Dict[str, str]],
+        debug: bool = False,
+    ) -> BatchProcessResult:
+        del debug  # 当前接口默认返回调试字段，保留参数仅为兼容既有调用。
+
+        total = len(people)
+        if total == 0:
+            return BatchProcessResult(
+                total=0,
+                success=0,
+                failed=0,
+                results=[],
+                query_seconds=0.0,
+                writeback_seconds=0.0,
+            )
+
+        self.feishu_client.ensure_token()
+        resolved_record_ids, lookup_errors = self.resolve_record_targets(people=people, lookup=lookup)
+
+        query_started = time.perf_counter()
+        query_results = self.run_batch_query(people)
+        query_seconds = time.perf_counter() - query_started
+
+        writeback_started = time.perf_counter()
+        response_rows: List[BatchPersonResult] = []
+        success_count = 0
+
+        for index, person in enumerate(people):
+            query_result = query_results[index] if index < len(query_results) else PersonQueryResult(
+                record_id=str(person.get("record_id") or "").strip(),
+                name=person.get("name", ""),
+                id_number=person.get("id_number", ""),
+                status="fail_other",
+                error="查询结果缺失",
+            )
+
+            record_id = str(
+                query_result.record_id or resolved_record_ids[index] or person.get("record_id") or ""
+            ).strip() or None
+            query_status = QUERY_STATUS_LABELS.get(query_result.status, query_result.status)
+            query_error = str(query_result.error).strip() if query_result.error else None
+            writeback_error = lookup_errors[index]
+            person_success = False
+
+            if query_result.status != "success":
+                writeback_error = writeback_error or SKIPPED_WRITEBACK_MESSAGE
+            elif writeback_error:
+                logger.warning(
+                    "请求 %s 记录 %s 无法回填：%s",
+                    request_id,
+                    record_id or person.get("id_number", ""),
+                    writeback_error,
+                )
+            elif not record_id:
+                writeback_error = LOOKUP_REQUIRED_MESSAGE
+            else:
+                try:
+                    fields = self.build_feishu_fields(
+                        result=query_result,
+                        field_mapping=field_mapping,
+                        record_reference=record_id,
+                    )
+                    if self.feishu_client.update_record(record_id, fields):
+                        person_success = True
+                        success_count += 1
+                    else:
+                        writeback_error = WRITEBACK_FAILED_MESSAGE
+                except Exception as exc:
+                    logger.error("请求 %s 回填记录 %s 失败: %s", request_id, record_id, exc, exc_info=True)
+                    writeback_error = str(exc)
+
+            response_rows.append(
+                BatchPersonResult(
+                    name=query_result.name or person.get("name", ""),
+                    id_number=query_result.id_number or person.get("id_number", ""),
+                    success=person_success,
+                    record_id=record_id,
+                    query_status=query_status,
+                    query_error=query_error,
+                    writeback_error=writeback_error,
+                )
+            )
+
+        writeback_seconds = time.perf_counter() - writeback_started
+        failed_count = total - success_count
+        logger.info(
+            "请求 %s 批量处理完成: total=%s success=%s failed=%s query=%.2fs writeback=%.2fs",
+            request_id,
+            total,
+            success_count,
+            failed_count,
+            query_seconds,
+            writeback_seconds,
+        )
+        return BatchProcessResult(
+            total=total,
+            success=success_count,
+            failed=failed_count,
+            results=response_rows,
+            query_seconds=query_seconds,
+            writeback_seconds=writeback_seconds,
+        )
+
     def build_feishu_fields(
         self, 
         result: PersonQueryResult, 
-        field_mapping: Dict[str, Dict[str, str]]
+        field_mapping: Dict[str, Dict[str, str]],
+        record_reference: str = "",
+        save_dir: Optional[str] = None
     ) -> Dict[str, Any]:
         fields = self.build_reset_fields(field_mapping)
 
@@ -318,10 +478,23 @@ class CertificateService:
 
             filename = self.build_certificate_filename(
                 result=result,
-                record_reference=result.record_id or "",
+                record_reference=record_reference or result.record_id or "",
                 cert_type=cert_type,
                 card=card,
             )
+
+            # 如果提供了 save_dir，将截图保存到本地
+            if save_dir:
+                try:
+                    p = Path(save_dir)
+                    p.mkdir(parents=True, exist_ok=True)
+                    local_path = p / filename
+                    with open(local_path, "wb") as f:
+                        f.write(card.screenshot_bytes)
+                    logger.info(f"已保存证书截图到本地: {local_path}")
+                except Exception as e:
+                    logger.error(f"保存本地截图失败: {e}")
+
             file_token = self.feishu_client.upload_image(filename=filename, content=card.screenshot_bytes)
             fields[mapping["attachment_field"]] = self.feishu_client.build_attachment_field(
                 file_token=file_token,
