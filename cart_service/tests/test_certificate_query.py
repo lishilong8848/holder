@@ -8,6 +8,7 @@ from PIL import Image
 
 from app.certificate_query import (
     EFFECTIVE_END_FIELD,
+    FIRST_ISSUE_FIELD,
     NAME_FIELD,
     OPERATION_ITEM_FIELD,
     REVIEW_ACTUAL_FIELD,
@@ -125,6 +126,43 @@ class CertificateQueryUnitTests(unittest.TestCase):
         self.assertEqual(cards[0].fields[NAME_FIELD], "李世龙")
         self.assertIsNotNone(cards[0].screenshot_bytes)
         self.assertGreater(len(cards[0].screenshot_bytes), 0)
+
+    def test_extract_certificate_cards_keeps_records_with_different_actual_review_dates(self):
+        headers = [
+            NAME_FIELD,
+            OPERATION_ITEM_FIELD,
+            EFFECTIVE_END_FIELD,
+            FIRST_ISSUE_FIELD,
+            REVIEW_ACTUAL_FIELD,
+        ]
+        without_review = FakeRow(
+            headers=headers,
+            values=["孙婷婷", "低压电工作业", "2027-07-07", "2021-07-08", ""],
+        )
+        with_review = FakeRow(
+            headers=headers,
+            values=["孙婷婷", "低压电工作业", "2027-07-07", "2021-07-08", "2024-07-05"],
+        )
+
+        query = self._build_query_without_init()
+        query.driver = FakeDriver(
+            tables=[
+                FakeTable([without_review], b"without-review"),
+                FakeTable([with_review], b"with-review"),
+            ]
+        )
+        query._is_history_table = lambda _table: False
+        query.capture_element_screenshot = lambda table: table._screenshot_bytes
+
+        cards = query.extract_certificate_cards()
+        selected = CertificateQuery.select_primary_certificates(cards)
+
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(
+            selected["low_voltage"].fields[REVIEW_ACTUAL_FIELD],
+            "2024-07-05",
+        )
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"with-review")
 
     def test_select_primary_certificates_prefers_latest_expire_date(self):
         earlier = ExtractedCertificateCard(

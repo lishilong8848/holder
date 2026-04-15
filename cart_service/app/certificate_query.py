@@ -454,6 +454,7 @@ class CertificateQuery:
                 row_data.get(OPERATION_ITEM_FIELD, ""),
                 row_data.get(EFFECTIVE_END_FIELD, ""),
                 row_data.get(FIRST_ISSUE_FIELD, ""),
+                row_data.get(REVIEW_ACTUAL_FIELD, ""),
             )
             if signature in signatures:
                 continue

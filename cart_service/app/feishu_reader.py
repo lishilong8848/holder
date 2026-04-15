@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import uuid
 from io import BytesIO
 from typing import Any, Dict, List, Optional
 
@@ -13,10 +14,12 @@ from lark_oapi.api.bitable.v1 import (
     AppTableRecord,
     CreateAppTableRecordRequest,
     GetAppTableRecordRequest,
+    ListAppTableRecordRequest,
     UpdateAppTableRecordRequest,
 )
 from lark_oapi.api.bitable.v1.model.attachment import Attachment as BitableAttachment
 from lark_oapi.api.drive.v1 import UploadAllMediaRequest, UploadAllMediaRequestBody
+from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
 
 
@@ -25,6 +28,14 @@ logger = logging.getLogger(__name__)
 BITABLE_MEDIA_PARENT_TYPE = "bitable_image"
 WIKI_NODE_OBJ_TYPE = "wiki"
 BITABLE_OBJ_TYPE = "bitable"
+DATA_NOT_READY_CODE = "1254607"
+GET_RECORD_DATA_NOT_READY_RETRY_DELAYS = (1, 2, 3, 5, 8)
+
+
+def _is_data_not_ready_response(response: Any) -> bool:
+    code = str(getattr(response, "code", "") or "")
+    msg = str(getattr(response, "msg", "") or "")
+    return code == DATA_NOT_READY_CODE or "Data not ready" in msg
 
 
 class FeishuTableReader:
@@ -108,6 +119,42 @@ class FeishuTableReader:
         self._resolved_app_token = self.raw_app_token
         self.app_token = self.raw_app_token
         return self._resolved_app_token
+
+    def send_text_message(
+        self,
+        receive_id: str,
+        text: str,
+        *,
+        receive_id_type: str = "chat_id",
+    ) -> bool:
+        """发送普通文本消息，默认发送到群 chat_id。"""
+        receive_id = str(receive_id or "").strip()
+        if not receive_id:
+            return False
+        if not text:
+            return False
+
+        if not self.tenant_token or int(time.time()) >= self.token_expire_time:
+            self.refresh_token()
+
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(receive_id)
+                .msg_type("text")
+                .content(json.dumps({"text": text}, ensure_ascii=False))
+                .uuid(str(uuid.uuid4()))
+                .build()
+            )
+            .build()
+        )
+        response = self.client.im.v1.message.create(request, self._request_option_from_current_token())
+        if not response.success():
+            print(f"[飞书] 发送文本消息失败: {response.code} - {response.msg}")
+            return False
+        return True
 
     def upload_image(self, filename: str, content: bytes) -> str:
         if not content:
@@ -207,23 +254,46 @@ class FeishuTableReader:
         response = self.client.bitable.v1.app_table_record.update(request, self._request_option())
         return response.success()
 
-    def get_record(self, record_id: str, table_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_record(
+        self,
+        record_id: str,
+        table_id: Optional[str] = None,
+        retry_delays: Optional[List[float]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """获取单条记录，返回 fields 字典"""
-        request = (
-            GetAppTableRecordRequest.builder()
-            .app_token(self.resolve_app_token())
-            .table_id(table_id or self.table_id)
-            .record_id(record_id)
-            .build()
-        )
-        response = self.client.bitable.v1.app_table_record.get(request, self._request_option())
-        if not response.success():
+        delays = GET_RECORD_DATA_NOT_READY_RETRY_DELAYS if retry_delays is None else tuple(retry_delays)
+        max_attempts = len(delays) + 1
+
+        for attempt in range(1, max_attempts + 1):
+            request = (
+                GetAppTableRecordRequest.builder()
+                .app_token(self.resolve_app_token())
+                .table_id(table_id or self.table_id)
+                .record_id(record_id)
+                .build()
+            )
+            response = self.client.bitable.v1.app_table_record.get(request, self._request_option())
+            if response.success():
+                record = getattr(getattr(response, "data", None), "record", None)
+                if record is None:
+                    return None
+                return getattr(record, "fields", None)
+
+            if _is_data_not_ready_response(response) and attempt < max_attempts:
+                delay = delays[attempt - 1]
+                print(
+                    (
+                        f"[飞书] 记录 {record_id} 暂未就绪，"
+                        f"{delay} 秒后重试 ({attempt}/{max_attempts - 1})"
+                    )
+                )
+                time.sleep(delay)
+                continue
+
             print(f"[飞书] 获取记录失败: {response.code} - {response.msg}")
             return None
-        record = getattr(getattr(response, "data", None), "record", None)
-        if record is None:
-            return None
-        return getattr(record, "fields", None)
+
+        return None
 
     def create_record(self, fields: Dict[str, Any], table_id: Optional[str] = None) -> Optional[str]:
         """在指定表中创建一条记录，返回 record_id"""

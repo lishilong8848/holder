@@ -4,7 +4,7 @@ from pathlib import Path
 
 import openpyxl
 
-from app.message_handler import parse_excel_for_personnel, should_query_certificate
+from app.message_handler import deduplicate_personnel, parse_excel_for_personnel, should_query_certificate
 
 
 class MessageHandlerExcelTests(unittest.TestCase):
@@ -57,6 +57,60 @@ class MessageHandlerExcelTests(unittest.TestCase):
         self.assertEqual(len(personnel), 1)
         self.assertEqual(personnel[0]["job_type"], "")
         self.assertFalse(personnel[0]["has_permission"])
+
+    def test_deduplicate_personnel_merges_same_name_and_id(self):
+        personnel = [
+            {
+                "name": "张三",
+                "id_number": "320101199001010011",
+                "phone": "",
+                "gender": "",
+                "job_type": "一般作业",
+                "has_permission": False,
+            },
+            {
+                "name": "张三",
+                "id_number": "320101199001010011",
+                "phone": "13800000000",
+                "gender": "男",
+                "job_type": "低压电工作业",
+                "has_permission": True,
+            },
+        ]
+
+        deduped = deduplicate_personnel(personnel)
+
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(deduped[0]["name"], "张三")
+        self.assertEqual(deduped[0]["id_number"], "320101199001010011")
+        self.assertEqual(deduped[0]["phone"], "13800000000")
+        self.assertEqual(deduped[0]["gender"], "男")
+        self.assertEqual(deduped[0]["job_type"], "一般作业/低压电工作业")
+        self.assertTrue(deduped[0]["has_permission"])
+
+    def test_deduplicate_personnel_keeps_different_people(self):
+        personnel = [
+            {
+                "name": "张三",
+                "id_number": "320101199001010011",
+                "phone": "",
+                "gender": "",
+                "job_type": "一般作业",
+                "has_permission": False,
+            },
+            {
+                "name": "李四",
+                "id_number": "320101199001010011",
+                "phone": "",
+                "gender": "",
+                "job_type": "一般作业",
+                "has_permission": False,
+            },
+        ]
+
+        deduped = deduplicate_personnel(personnel)
+
+        self.assertEqual(len(deduped), 2)
 
 
 if __name__ == "__main__":

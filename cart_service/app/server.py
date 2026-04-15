@@ -186,17 +186,26 @@ async def trigger_by_record_id(req: TriggerRequest):
         )
 
     try:
-        from .message_handler import process_record_message
+        from .message_handler import claim_record_processing, finish_record_processing, process_record_message
     except ImportError:
-        from app.message_handler import process_record_message
+        from app.message_handler import claim_record_processing, finish_record_processing, process_record_message
 
     import threading
+
+    if not claim_record_processing(record_id):
+        return {
+            "status": "duplicate_ignored",
+            "record_id": record_id,
+            "message": "该记录正在处理或近期已处理，已跳过重复触发",
+        }
 
     def _run():
         try:
             process_record_message(record_id, _feishu_handler_client)
         except Exception as e:
             logger.error(f"[API触发] 处理记录 {record_id} 失败: {e}")
+        finally:
+            finish_record_processing(record_id)
 
     thread = threading.Thread(target=_run, name=f"api-trigger-{record_id}", daemon=True)
     thread.start()

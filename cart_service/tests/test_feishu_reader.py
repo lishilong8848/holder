@@ -1,5 +1,7 @@
+import json
+import time
 import unittest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 from app.feishu_reader import BITABLE_MEDIA_PARENT_TYPE, FeishuTableReader
 
@@ -12,6 +14,7 @@ class FeishuReaderUnitTests(unittest.TestCase):
         reader.table_id = "tbl_xxx"
         reader._resolved_app_token = None
         reader.tenant_token = "tenant-token"
+        reader.token_expire_time = int(time.time()) + 3600
         reader.client = MagicMock()
         reader._request_option = Mock(return_value="request-option")
         reader._request_option_from_current_token = Mock(return_value="request-option")
@@ -54,10 +57,53 @@ class FeishuReaderUnitTests(unittest.TestCase):
         self.assertEqual(attachments[0].file_token, "file_token_123")
         self.assertEqual(attachments[0].name, "test.jpg")
 
+    def test_send_text_message_posts_chat_text(self):
+        reader = self._build_reader_without_init()
+        fake_response = MagicMock()
+        fake_response.success.return_value = True
+        reader.client.im.v1.message.create.return_value = fake_response
+
+        sent = reader.send_text_message("oc_xxx", "查询结果汇总", receive_id_type="chat_id")
+
+        self.assertTrue(sent)
+        request = reader.client.im.v1.message.create.call_args[0][0]
+        option = reader.client.im.v1.message.create.call_args[0][1]
+        self.assertEqual(option, "request-option")
+        self.assertEqual(request.receive_id_type, "chat_id")
+        self.assertEqual(request.request_body.receive_id, "oc_xxx")
+        self.assertEqual(request.request_body.msg_type, "text")
+        self.assertEqual(json.loads(request.request_body.content), {"text": "查询结果汇总"})
+        self.assertTrue(request.request_body.uuid)
+
     def test_update_record_short_circuits_empty_fields(self):
         reader = self._build_reader_without_init()
         self.assertTrue(reader.update_record("rec_001", {}))
         reader.client.bitable.v1.app_table_record.update.assert_not_called()
+
+    def test_get_record_retries_when_data_is_not_ready(self):
+        reader = self._build_reader_without_init()
+        reader.resolve_app_token = Mock(return_value="base_xxx")
+
+        not_ready_response = MagicMock()
+        not_ready_response.success.return_value = False
+        not_ready_response.code = 1254607
+        not_ready_response.msg = "Data not ready, please try again later"
+
+        success_response = MagicMock()
+        success_response.success.return_value = True
+        success_response.data.record.fields = {"姓名": "张三"}
+
+        reader.client.bitable.v1.app_table_record.get.side_effect = [
+            not_ready_response,
+            success_response,
+        ]
+
+        with patch("app.feishu_reader.time.sleep") as sleep:
+            fields = reader.get_record("rec_001", table_id="tbl_xxx", retry_delays=[0.1])
+
+        self.assertEqual(fields, {"姓名": "张三"})
+        self.assertEqual(reader.client.bitable.v1.app_table_record.get.call_count, 2)
+        sleep.assert_called_once_with(0.1)
 
     def test_list_records_uses_field_names_and_collects_all_pages(self):
         reader = self._build_reader_without_init()

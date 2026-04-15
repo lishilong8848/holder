@@ -15,11 +15,12 @@ import re
 import logging
 import threading
 import ast
-from dataclasses import dataclass, field
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 import openpyxl
 
@@ -78,6 +79,34 @@ FIELD_MAPPING = {
     },
 }
 
+SUMMARY_MESSAGE_CHUNK_SIZE = 3500
+EFFECTIVE_END_FIELD = "有效期结束日期"
+REVIEW_ACTUAL_FIELD = "实际复审日期"
+DEFAULT_RECORD_DEDUP_TTL_SECONDS = 24 * 60 * 60
+QUERY_STATUS_DISPLAY = {
+    "success": "查询成功",
+    "fail_id": "证件号有误",
+    "fail_no_data": "未查询到证件信息",
+    "fail_other": "查询失败",
+}
+
+
+@dataclass
+class SummaryCertificate:
+    label: str
+    expire_date: str
+    review_actual_date: str
+
+
+@dataclass
+class SummaryPerson:
+    name: str
+    job_type: str
+    write_created: bool
+    status: str = ""
+    query_error: str = ""
+    certificates: List[SummaryCertificate] = field(default_factory=list)
+
 
 @dataclass
 class RecordProcessingContext:
@@ -87,21 +116,62 @@ class RecordProcessingContext:
     download_dir: Path
     timestamp: str
     personnel_count: int
+    query_required_count: int
+    direct_write_count: int
     expected_write_tasks: int
     feishu_client: Any
     service: Any
+    chat_id: Optional[str] = None
     created_count: int = 0
     completed_write_tasks: int = 0
+    query_successes: List[SummaryPerson] = field(default_factory=list)
+    query_failures: List[SummaryPerson] = field(default_factory=list)
+    direct_writebacks: List[SummaryPerson] = field(default_factory=list)
     done_event: threading.Event = field(default_factory=threading.Event)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def mark_write_completed(self, *, created: bool) -> None:
+    def mark_write_completed(
+        self,
+        *,
+        created: bool,
+        person: Dict[str, str],
+        query_result: Optional[Any],
+    ) -> None:
         with self.lock:
+            summary_person = build_summary_person(
+                person=person,
+                write_created=created,
+                query_result=query_result,
+            )
+            if query_result is None:
+                self.direct_writebacks.append(summary_person)
+            elif is_successful_query_result(query_result):
+                self.query_successes.append(summary_person)
+            else:
+                self.query_failures.append(summary_person)
+
             if created:
                 self.created_count += 1
             self.completed_write_tasks += 1
             if self.completed_write_tasks >= self.expected_write_tasks:
                 self.done_event.set()
+
+    def build_summary_snapshot(self) -> Dict[str, Any]:
+        with self.lock:
+            return {
+                "record_id": self.source_record_id,
+                "shigong_code": self.shigong_code,
+                "timestamp": self.timestamp,
+                "personnel_count": self.personnel_count,
+                "query_required_count": self.query_required_count,
+                "direct_write_count": self.direct_write_count,
+                "created_records": self.created_count,
+                "completed_write_tasks": self.completed_write_tasks,
+                "query_successes": [asdict(item) for item in self.query_successes],
+                "query_failures": [asdict(item) for item in self.query_failures],
+                "direct_writebacks": [asdict(item) for item in self.direct_writebacks],
+                "download_dir": str(self.download_dir),
+            }
 
 
 @dataclass
@@ -116,6 +186,68 @@ class WriteTask:
     context: RecordProcessingContext
     person: Dict[str, str]
     query_result: Optional[Any] = None
+
+
+def display_job_type(person: Dict[str, str]) -> str:
+    return str(person.get("job_type") or "").strip() or "未填写"
+
+
+def display_query_status(query_result: Any) -> str:
+    status = str(getattr(query_result, "status", "") or "").strip()
+    if status == "success" and not getattr(query_result, "selected_certificates", None):
+        return "查询成功但未提取到证件"
+    return QUERY_STATUS_DISPLAY.get(status, status or "未知状态")
+
+
+def is_successful_query_result(query_result: Any) -> bool:
+    return (
+        str(getattr(query_result, "status", "") or "").strip() == "success"
+        and bool(getattr(query_result, "selected_certificates", None))
+    )
+
+
+def get_certificate_label(cert_type: str) -> str:
+    mapping = FIELD_MAPPING.get(cert_type) or {}
+    return mapping.get("attachment_field") or cert_type
+
+
+def get_certificate_field_text(card: Any, field_name: str) -> str:
+    fields = getattr(card, "fields", None) or {}
+    return str(fields.get(field_name) or "").strip() or "无"
+
+
+def build_summary_certificates(query_result: Optional[Any]) -> List[SummaryCertificate]:
+    selected = getattr(query_result, "selected_certificates", None) or {}
+    certificates: List[SummaryCertificate] = []
+    for cert_type, card in selected.items():
+        certificates.append(
+            SummaryCertificate(
+                label=get_certificate_label(cert_type),
+                expire_date=get_certificate_field_text(card, EFFECTIVE_END_FIELD),
+                review_actual_date=get_certificate_field_text(card, REVIEW_ACTUAL_FIELD),
+            )
+        )
+    return certificates
+
+
+def build_summary_person(
+    *,
+    person: Dict[str, str],
+    write_created: bool,
+    query_result: Optional[Any],
+) -> SummaryPerson:
+    query_error = ""
+    if query_result is not None:
+        query_error = str(getattr(query_result, "error", "") or "").strip()
+
+    return SummaryPerson(
+        name=str(person.get("name") or "").strip(),
+        job_type=display_job_type(person),
+        write_created=write_created,
+        status=display_query_status(query_result) if query_result is not None else "",
+        query_error=query_error,
+        certificates=build_summary_certificates(query_result),
+    )
 
 
 _GLOBAL_QUERY_QUEUE: Queue = Queue()
@@ -402,6 +534,63 @@ def split_job_types(job_type_raw: str) -> List[str]:
     return [job_type.strip() for job_type in (job_type_raw or "").split("/") if job_type.strip()]
 
 
+def merge_job_type_values(*job_type_values: str) -> str:
+    merged: List[str] = []
+    seen: Set[str] = set()
+    for value in job_type_values:
+        for job_type in split_job_types(value):
+            if job_type in seen:
+                continue
+            seen.add(job_type)
+            merged.append(job_type)
+    return "/".join(merged)
+
+
+def deduplicate_personnel(personnel: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """按姓名+身份证号合并人员，避免同一人在重复行或多个附件中重复回填。"""
+    deduped: List[Dict[str, str]] = []
+    by_key: Dict[tuple[str, str], Dict[str, str]] = {}
+
+    for person in personnel:
+        name = str(person.get("name") or "").strip()
+        id_number = str(person.get("id_number") or "").strip().upper()
+        if not name or not id_number:
+            continue
+
+        key = (name, id_number)
+        existing = by_key.get(key)
+        if existing is None:
+            normalized = dict(person)
+            normalized["name"] = name
+            normalized["id_number"] = id_number
+            normalized["phone"] = str(normalized.get("phone") or "").strip()
+            normalized["gender"] = str(normalized.get("gender") or "").strip()
+            normalized["job_type"] = str(normalized.get("job_type") or "").strip()
+            normalized["has_permission"] = should_query_certificate(normalized["job_type"])
+            by_key[key] = normalized
+            deduped.append(normalized)
+            continue
+
+        if not existing.get("phone") and person.get("phone"):
+            existing["phone"] = str(person.get("phone") or "").strip()
+        if not existing.get("gender") and person.get("gender"):
+            existing["gender"] = str(person.get("gender") or "").strip()
+
+        existing["job_type"] = merge_job_type_values(
+            existing.get("job_type") or "",
+            str(person.get("job_type") or "").strip(),
+        )
+        existing["has_permission"] = bool(existing.get("has_permission")) or should_query_certificate(
+            person.get("job_type")
+        )
+
+    duplicate_count = len(personnel) - len(deduped)
+    if duplicate_count > 0:
+        print(f"[消息处理] 已按姓名+身份证号去重 {duplicate_count} 条重复人员记录")
+
+    return deduped
+
+
 def build_basic_person_fields(
     *,
     source_record_id: str,
@@ -486,6 +675,221 @@ def write_query_result_record(
     return False
 
 
+def display_timestamp(timestamp: str) -> str:
+    try:
+        return datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return timestamp
+
+
+def display_write_status(write_created: bool) -> str:
+    return "成功" if write_created else "失败"
+
+
+def format_table_cell(value: Any) -> str:
+    text = str(value or "").strip() or "无"
+    return text.replace("|", "/").replace("\r", " ").replace("\n", " ")
+
+
+def format_certificate_line(certificate: Dict[str, Any]) -> str:
+    label = format_table_cell(certificate.get("label") or "未知证件")
+    expire_date = format_table_cell(certificate.get("expire_date") or "无")
+    review_actual_date = format_table_cell(certificate.get("review_actual_date") or "无")
+    return f"{label} 到期:{expire_date} 实复:{review_actual_date}"
+
+
+def format_stats_table(
+    *,
+    personnel_count: int,
+    query_required_count: int,
+    query_success_count: int,
+    query_failure_count: int,
+    direct_write_count: int,
+    writeback_success_count: int,
+    writeback_failure_count: int,
+) -> List[str]:
+    return [
+        f"总人数 ：{personnel_count}",
+        f"需查证件 ：{query_required_count}",
+        f"查询成功 ：{query_success_count}",
+        f"查询失败 ：{query_failure_count}",
+        f"未查询直回填：{direct_write_count}",
+        f"回填成功 ：{writeback_success_count}",
+        f"回填失败 ：{writeback_failure_count}",
+    ]
+
+
+def format_success_people_table(people: List[Dict[str, Any]]) -> List[str]:
+    if not people:
+        return ["无"]
+
+    lines = [
+        "| 序号 | 姓名 | 作业类型 | 证件信息 |",
+        "| ---: | --- | --- | --- |",
+    ]
+    for index, item in enumerate(people, start=1):
+        name = format_table_cell(item.get("name") or "未知姓名")
+        job_type = format_table_cell(item.get("job_type") or "未填写")
+        certificates = item.get("certificates") or []
+        certificate_lines = [format_certificate_line(cert) for cert in certificates] or ["无"]
+        prefix = f"| {index} | {name} | {job_type} | "
+        lines.append(f"{prefix}{certificate_lines[0]}")
+        continuation_indent = " " * len(prefix)
+        for certificate_line in certificate_lines[1:]:
+            lines.append(f"{continuation_indent}{certificate_line}")
+    return lines
+
+
+def format_summary_section(
+    *,
+    people: List[Dict[str, Any]],
+    mode: str,
+) -> List[str]:
+    if not people:
+        return ["无"]
+
+    if mode == "failure":
+        lines = [
+            "| 序号 | 姓名 | 作业类型 | 状态 |",
+            "| ---: | --- | --- | --- |",
+        ]
+    else:
+        lines = [
+            "| 序号 | 姓名 | 作业类型 | 回填 |",
+            "| ---: | --- | --- | --- |",
+        ]
+
+    for index, item in enumerate(people, start=1):
+        name = format_table_cell(item.get("name") or "未知姓名")
+        job_type = format_table_cell(item.get("job_type") or "未填写")
+        if mode == "failure":
+            lines.append(
+                f"| {index} | {name} | {job_type} | {format_table_cell(item.get('status') or '未知状态')} |"
+            )
+        else:
+            lines.append(
+                f"| {index} | {name} | {job_type} | {display_write_status(bool(item.get('write_created')))} |"
+            )
+    return lines
+
+
+def build_processing_summary_text(context: RecordProcessingContext) -> str:
+    snapshot = context.build_summary_snapshot()
+    completed_count = int(snapshot.get("completed_write_tasks") or 0)
+    created_count = int(snapshot.get("created_records") or 0)
+    writeback_failed_count = max(completed_count - created_count, 0)
+    query_successes = snapshot.get("query_successes") or []
+    query_failures = snapshot.get("query_failures") or []
+    direct_writebacks = snapshot.get("direct_writebacks") or []
+
+    lines = [
+        "特种作业查证结果汇总",
+        f"施工编码：{snapshot.get('shigong_code') or context.shigong_code or '未填写'}",
+        f"处理时间：{display_timestamp(str(snapshot.get('timestamp') or context.timestamp))}",
+        "",
+        "统计汇总",
+        *format_stats_table(
+            personnel_count=int(snapshot.get("personnel_count") or 0),
+            query_required_count=int(snapshot.get("query_required_count") or 0),
+            query_success_count=len(query_successes),
+            query_failure_count=len(query_failures),
+            direct_write_count=int(snapshot.get("direct_write_count") or len(direct_writebacks)),
+            writeback_success_count=created_count,
+            writeback_failure_count=writeback_failed_count,
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def split_summary_message(
+    message: str,
+    *,
+    max_chars: int = SUMMARY_MESSAGE_CHUNK_SIZE,
+) -> List[str]:
+    message = message.strip()
+    if not message:
+        return []
+    if len(message) <= max_chars:
+        return [message]
+
+    lines = message.splitlines()
+    title = lines[0] if lines else "特种作业查证结果汇总"
+    body_lines = lines[1:] if len(lines) > 1 else []
+    reserved_chars = len(title) + 50
+    body_limit = max(20, max_chars - reserved_chars)
+
+    chunks: List[List[str]] = []
+    current: List[str] = []
+    current_len = 0
+
+    def flush_current() -> None:
+        nonlocal current, current_len
+        if current:
+            chunks.append(current)
+            current = []
+            current_len = 0
+
+    for line in body_lines:
+        if len(line) + 1 > body_limit:
+            part_size = max(body_limit - 1, 1)
+            line_parts = [line[i:i + part_size] for i in range(0, len(line), part_size)]
+        else:
+            line_parts = [line]
+
+        for part in line_parts:
+            part_len = len(part) + 1
+            if current and current_len + part_len > body_limit:
+                flush_current()
+            current.append(part)
+            current_len += part_len
+
+    flush_current()
+    if not chunks:
+        chunks = [[]]
+
+    total = len(chunks)
+    return [
+        f"{title}（第 {index}/{total} 段）\n" + "\n".join(chunk).strip()
+        for index, chunk in enumerate(chunks, start=1)
+    ]
+
+
+def build_processing_summary_messages(
+    context: RecordProcessingContext,
+    *,
+    max_chars: int = SUMMARY_MESSAGE_CHUNK_SIZE,
+) -> List[str]:
+    return split_summary_message(build_processing_summary_text(context), max_chars=max_chars)
+
+
+def send_processing_summary_to_chat(context: RecordProcessingContext) -> None:
+    chat_id = str(context.chat_id or "").strip()
+    if not chat_id:
+        print("[消息处理] 未获取到群 chat_id，跳过发送汇总消息")
+        return
+
+    send_text_message = getattr(context.feishu_client, "send_text_message", None)
+    if not callable(send_text_message):
+        print("[消息处理] 飞书客户端不支持发送文本消息，跳过发送汇总消息")
+        return
+
+    messages = build_processing_summary_messages(context)
+    if not messages:
+        return
+
+    for index, message in enumerate(messages, start=1):
+        try:
+            sent = send_text_message(chat_id, message, receive_id_type="chat_id")
+        except Exception as exc:
+            print(f"[消息处理] 发送汇总消息异常: {exc}")
+            return
+        if not sent:
+            print(f"[消息处理] 发送汇总消息失败: 第 {index}/{len(messages)} 段")
+            return
+
+    print(f"[消息处理] 已发送查询结果汇总到群: {chat_id}")
+
+
 def query_person_worker(
     *,
     chrome_bin: Optional[str],
@@ -568,7 +972,11 @@ def write_record_worker() -> None:
                 download_dir=context.download_dir,
             )
 
-        context.mark_write_completed(created=created)
+        context.mark_write_completed(
+            created=created,
+            person=task.person,
+            query_result=task.query_result,
+        )
 
 
 def ensure_global_workers_started() -> None:
@@ -600,13 +1008,14 @@ def ensure_global_workers_started() -> None:
         print("[消息处理] 已启动全局查询/写入工作线程")
 
 
-def process_record_message(record_id: str, feishu_client) -> None:
+def process_record_message(record_id: str, feishu_client, chat_id: Optional[str] = None) -> None:
     """
     完整的消息处理流程（在后台线程中执行）
 
     Args:
         record_id: 飞书表记录 ID
         feishu_client: FeishuTableReader 实例
+        chat_id: 触发消息所在群 ID，用于处理完成后发送汇总
     """
     from .service import CertificateService
 
@@ -714,6 +1123,11 @@ def process_record_message(record_id: str, feishu_client) -> None:
         print(f"[消息处理] 未解析到有效人员，退出")
         return
 
+    all_personnel = deduplicate_personnel(all_personnel)
+    if not all_personnel:
+        print(f"[消息处理] 人员去重后无有效人员，退出")
+        return
+
     # 按作业类型分组
     perm_personnel = [p for p in all_personnel if p["has_permission"]]
     no_perm_personnel = [p for p in all_personnel if not p["has_permission"]]
@@ -734,9 +1148,12 @@ def process_record_message(record_id: str, feishu_client) -> None:
         download_dir=download_dir,
         timestamp=timestamp,
         personnel_count=len(all_personnel),
+        query_required_count=len(perm_personnel),
+        direct_write_count=len(no_perm_personnel),
         expected_write_tasks=len(all_personnel),
         feishu_client=feishu_client,
         service=service,
+        chat_id=chat_id,
     )
 
     ensure_global_workers_started()
@@ -768,21 +1185,74 @@ def process_record_message(record_id: str, feishu_client) -> None:
     print(f"{'#'*60}\n")
 
     # 保存处理结果到本地 JSON
-    result_summary = {
-        "record_id": record_id,
-        "timestamp": timestamp,
-        "personnel_count": len(all_personnel),
-        "created_records": created_count,
-        "download_dir": str(download_dir),
-    }
+    result_summary = context.build_summary_snapshot()
     summary_path = download_dir / "summary.json"
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(result_summary, f, ensure_ascii=False, indent=2)
 
+    send_processing_summary_to_chat(context)
 
-# 用于记录正在处理中的 ID，防止并发冲突
+
+# 用于记录正在处理中和近期已处理的 ID，防止同一记录重复触发导致重复插入
 _processing_ids = set()
+_recent_processed_records: Dict[str, float] = {}
 _lock = threading.Lock()
+
+
+def get_record_dedup_ttl_seconds() -> int:
+    raw_value = os.environ.get("FEISHU_RECORD_DEDUP_TTL_SECONDS", "")
+    if not raw_value:
+        return DEFAULT_RECORD_DEDUP_TTL_SECONDS
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        return DEFAULT_RECORD_DEDUP_TTL_SECONDS
+
+
+def _prune_recent_processed_records(now: float) -> None:
+    ttl_seconds = get_record_dedup_ttl_seconds()
+    if ttl_seconds <= 0:
+        _recent_processed_records.clear()
+        return
+
+    expired_ids = [
+        record_id
+        for record_id, processed_at in _recent_processed_records.items()
+        if now - processed_at > ttl_seconds
+    ]
+    for record_id in expired_ids:
+        _recent_processed_records.pop(record_id, None)
+
+
+def claim_record_processing(record_id: str) -> bool:
+    record_id = str(record_id or "").strip()
+    if not record_id:
+        return False
+
+    with _lock:
+        now = time.time()
+        _prune_recent_processed_records(now)
+        if record_id in _processing_ids:
+            print(f"[消息处理] 记录 {record_id} 正在处理中，跳过重复触发")
+            return False
+        if record_id in _recent_processed_records:
+            print(f"[消息处理] 记录 {record_id} 已在近期处理过，跳过重复触发")
+            return False
+
+        _processing_ids.add(record_id)
+        return True
+
+
+def finish_record_processing(record_id: str, *, remember: bool = True) -> None:
+    record_id = str(record_id or "").strip()
+    if not record_id:
+        return
+
+    with _lock:
+        _processing_ids.discard(record_id)
+        if remember and get_record_dedup_ttl_seconds() > 0:
+            _recent_processed_records[record_id] = time.time()
+
 
 def handle_message_async(msg_data: Dict[str, Any], feishu_client) -> None:
     """
@@ -796,23 +1266,19 @@ def handle_message_async(msg_data: Dict[str, Any], feishu_client) -> None:
     if not record_id:
         return
 
-    # 检查是否正在处理中，防止重复触发
-    with _lock:
-        if record_id in _processing_ids:
-            return
-        _processing_ids.add(record_id)
+    if not claim_record_processing(record_id):
+        return
 
+    chat_id = str(msg_data.get("chat_id") or "").strip() or None
     print(f"[消息处理] 检测到记录ID: {record_id} (来源: {msg_data.get('msg_type', 'text')})，启动任务...")
 
     def _task_wrapper():
         try:
-            process_record_message(record_id, feishu_client)
+            process_record_message(record_id, feishu_client, chat_id=chat_id)
         except Exception as e:
             print(f"[消息处理] 处理记录 {record_id} 时发生未捕获异常: {e}")
         finally:
-            with _lock:
-                if record_id in _processing_ids:
-                    _processing_ids.remove(record_id)
+            finish_record_processing(record_id)
 
     thread = threading.Thread(
         target=_task_wrapper,
