@@ -40,6 +40,7 @@ NAME_FIELD = "姓名"
 OPERATION_ITEM_FIELD = "操作项目"
 EFFECTIVE_END_FIELD = "有效期结束日期"
 FIRST_ISSUE_FIELD = "初领日期"
+REVIEW_ACTUAL_FIELD = "实际复审日期"
 
 NO_RESULT_TEXT = "没有查询到相关证件信息"
 HISTORY_TEXT = "历史数据"
@@ -488,6 +489,16 @@ class CertificateQuery:
             if candidate_expire and current_expire:
                 if candidate_expire > current_expire:
                     selected[cert_type] = card
+                elif candidate_expire == current_expire:
+                    current_review_actual = cls.parse_date(current.fields.get(REVIEW_ACTUAL_FIELD, ""))
+                    candidate_review_actual = cls.parse_date(card.fields.get(REVIEW_ACTUAL_FIELD, ""))
+                    if candidate_review_actual and not current_review_actual:
+                        selected[cert_type] = card
+                    elif candidate_review_actual and current_review_actual:
+                        if candidate_review_actual >= current_review_actual:
+                            selected[cert_type] = card
+                    elif not candidate_review_actual and not current_review_actual:
+                        selected[cert_type] = card
             elif candidate_expire and not current_expire:
                 selected[cert_type] = card
 

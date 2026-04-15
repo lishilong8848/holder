@@ -10,6 +10,7 @@ from app.certificate_query import (
     EFFECTIVE_END_FIELD,
     NAME_FIELD,
     OPERATION_ITEM_FIELD,
+    REVIEW_ACTUAL_FIELD,
     CertificateQuery,
     ExtractedCertificateCard,
 )
@@ -137,6 +138,95 @@ class CertificateQueryUnitTests(unittest.TestCase):
 
         selected = CertificateQuery.select_primary_certificates([earlier, later])
         self.assertEqual(selected["low_voltage"].screenshot_bytes, b"later")
+
+    def test_select_primary_certificates_prefers_reviewed_cert_when_expire_dates_match(self):
+        without_review = ExtractedCertificateCard(
+            fields={OPERATION_ITEM_FIELD: "低压电工作业", EFFECTIVE_END_FIELD: "2030-11-06"},
+            screenshot_bytes=b"without-review",
+        )
+        with_review = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2027-01-01",
+            },
+            screenshot_bytes=b"with-review",
+        )
+
+        selected = CertificateQuery.select_primary_certificates([without_review, with_review])
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"with-review")
+
+    def test_select_primary_certificates_keeps_reviewed_cert_when_candidate_has_no_review(self):
+        with_review = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2027-01-01",
+            },
+            screenshot_bytes=b"with-review",
+        )
+        without_review = ExtractedCertificateCard(
+            fields={OPERATION_ITEM_FIELD: "低压电工作业", EFFECTIVE_END_FIELD: "2030-11-06"},
+            screenshot_bytes=b"without-review",
+        )
+
+        selected = CertificateQuery.select_primary_certificates([with_review, without_review])
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"with-review")
+
+    def test_select_primary_certificates_prefers_latest_review_date_when_expire_dates_match(self):
+        older_review = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2026-01-01",
+            },
+            screenshot_bytes=b"older-review",
+        )
+        newer_review = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2027-01-01",
+            },
+            screenshot_bytes=b"newer-review",
+        )
+
+        selected = CertificateQuery.select_primary_certificates([older_review, newer_review])
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"newer-review")
+
+    def test_select_primary_certificates_prefers_later_card_when_review_dates_are_equal(self):
+        first = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2027-01-01",
+            },
+            screenshot_bytes=b"first",
+        )
+        second = ExtractedCertificateCard(
+            fields={
+                OPERATION_ITEM_FIELD: "低压电工作业",
+                EFFECTIVE_END_FIELD: "2030-11-06",
+                REVIEW_ACTUAL_FIELD: "2027-01-01",
+            },
+            screenshot_bytes=b"second",
+        )
+
+        selected = CertificateQuery.select_primary_certificates([first, second])
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"second")
+
+    def test_select_primary_certificates_prefers_later_card_when_both_have_no_review(self):
+        first = ExtractedCertificateCard(
+            fields={OPERATION_ITEM_FIELD: "低压电工作业", EFFECTIVE_END_FIELD: "2030-11-06"},
+            screenshot_bytes=b"first",
+        )
+        second = ExtractedCertificateCard(
+            fields={OPERATION_ITEM_FIELD: "低压电工作业", EFFECTIVE_END_FIELD: "2030-11-06"},
+            screenshot_bytes=b"second",
+        )
+
+        selected = CertificateQuery.select_primary_certificates([first, second])
+        self.assertEqual(selected["low_voltage"].screenshot_bytes, b"second")
 
     def test_classify_certificate_type_returns_expected_mapping(self):
         self.assertEqual(CertificateQuery.classify_certificate_type("高压电工作业"), "high_voltage")
