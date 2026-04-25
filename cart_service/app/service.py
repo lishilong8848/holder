@@ -179,6 +179,15 @@ class BatchRequestCoordinator:
                 self._active_request_id = None
             self._condition.notify_all()
 
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "active_request_id": self._active_request_id,
+            "waiting_count": len(self._wait_queue),
+            "waiting_request_ids": list(self._wait_queue),
+            "max_queue_size": self.max_queue_size,
+            "queue_timeout_seconds": self.queue_timeout_seconds,
+        }
+
 
 class CertificateService:
     """负责单个批次请求的查询与飞书回填编排。"""

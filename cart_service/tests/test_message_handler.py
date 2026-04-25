@@ -7,11 +7,15 @@ from unittest.mock import Mock, patch
 import app.message_handler as message_handler
 from app.message_handler import (
     EFFECTIVE_END_FIELD,
+    WORKFLOW_CERTIFICATE,
+    WORKFLOW_PHOTO_AI,
     REVIEW_ACTUAL_FIELD,
     RecordProcessingContext,
     build_processing_summary_text,
+    build_processing_key,
     extract_record_id,
     handle_message_async,
+    parse_message_trigger,
     send_processing_summary_to_chat,
     split_summary_message,
 )
@@ -121,6 +125,41 @@ class ExtractRecordIdTests(unittest.TestCase):
         }
 
         self.assertEqual(extract_record_id(msg_data), "recvgJe0RmBmIM")
+
+
+class MessageTriggerTests(unittest.TestCase):
+    def test_certificate_title_triggers_certificate_workflow(self):
+        msg_data = {
+            "content": {"title": "特种作业查证 记录ID:recvgJe0RmBmIM"},
+            "chat_id": "oc_chat_001",
+        }
+
+        trigger = parse_message_trigger(msg_data)
+
+        self.assertIsNotNone(trigger)
+        self.assertEqual(trigger.workflow, WORKFLOW_CERTIFICATE)
+        self.assertEqual(trigger.record_id, "recvgJe0RmBmIM")
+        self.assertEqual(trigger.chat_id, "oc_chat_001")
+
+    def test_photo_ai_title_triggers_photo_ai_workflow(self):
+        msg_data = {
+            "content": {"title": "照片AI识别 记录ID:recPhotoAi001"},
+            "chat_id": "oc_chat_001",
+        }
+
+        trigger = parse_message_trigger(msg_data)
+
+        self.assertIsNotNone(trigger)
+        self.assertEqual(trigger.workflow, WORKFLOW_PHOTO_AI)
+        self.assertEqual(trigger.record_id, "recPhotoAi001")
+
+    def test_record_id_without_known_title_keyword_does_not_trigger(self):
+        msg_data = {
+            "content": {"title": "普通通知 记录ID:recvgJe0RmBmIM"},
+            "chat_id": "oc_chat_001",
+        }
+
+        self.assertIsNone(parse_message_trigger(msg_data))
 
 
 class ProcessingSummaryTests(unittest.TestCase):
@@ -313,7 +352,46 @@ class ProcessingSummaryTests(unittest.TestCase):
             handle_message_async(msg_data, Mock())
 
         process_record_message.assert_called_once()
-        self.assertIn("recvgJe0RmBmIM", message_handler._recent_processed_records)
+        self.assertIn(build_processing_key("recvgJe0RmBmIM", WORKFLOW_CERTIFICATE), message_handler._recent_processed_records)
+        message_handler._processing_ids.clear()
+        message_handler._recent_processed_records.clear()
+
+    def test_handle_message_async_allows_same_record_for_different_workflows(self):
+        message_handler._processing_ids.clear()
+        message_handler._recent_processed_records.clear()
+
+        class ImmediateThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+
+            def start(self):
+                self.target()
+
+        cert_msg = {
+            "msg_type": "text",
+            "display_text": "特种作业查证 记录ID：recvgJe0RmBmIM",
+            "chat_id": "oc_chat_001",
+        }
+        photo_msg = {
+            "msg_type": "text",
+            "display_text": "照片AI识别 记录ID：recvgJe0RmBmIM",
+            "chat_id": "oc_chat_001",
+        }
+
+        with patch("app.message_handler.threading.Thread", ImmediateThread), patch(
+            "app.message_handler.process_record_message"
+        ) as process_record_message, patch(
+            "app.message_handler.process_photo_ai_record_message"
+        ) as process_photo_ai_record_message:
+            handle_message_async(cert_msg, Mock())
+            handle_message_async(photo_msg, Mock())
+
+        process_record_message.assert_called_once()
+        process_photo_ai_record_message.assert_called_once()
+        self.assertIn(build_processing_key("recvgJe0RmBmIM", WORKFLOW_CERTIFICATE), message_handler._recent_processed_records)
+        self.assertIn(build_processing_key("recvgJe0RmBmIM", WORKFLOW_PHOTO_AI), message_handler._recent_processed_records)
         message_handler._processing_ids.clear()
         message_handler._recent_processed_records.clear()
 

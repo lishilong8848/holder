@@ -1,5 +1,7 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
@@ -44,6 +46,102 @@ class BatchApiTests(unittest.TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_ui_index_returns_html(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("施工安全控制台", response.text)
+        self.assertNotIn("Local Operations Console", response.text)
+        self.assertNotIn("SAFETY AUTOMATION", response.text)
+        self.assertNotIn("照片 AI", response.text)
+        self.assertNotIn("任务ID", response.text)
+        self.assertNotIn("记录ID", response.text)
+
+    def test_uvicorn_access_log_is_disabled(self):
+        self.assertTrue(server.logging.getLogger("uvicorn.access").disabled)
+        self.assertGreaterEqual(server.logging.getLogger("uvicorn.access").level, server.logging.WARNING)
+
+    def test_ui_status_returns_task_and_queue_info(self):
+        response = self.client.get("/api/ui/status")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["service"]["status"], "ok")
+        self.assertIn("queue", data)
+        self.assertIn("tasks", data)
+
+    def test_ui_config_masks_sensitive_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text("QWEN_API_KEY=sk-abcdef123456\nPORT=58000\n", encoding="utf-8")
+            with patch.object(server, "loaded_env_path", env_path):
+                response = self.client.get("/api/ui/config")
+
+        self.assertEqual(response.status_code, 200)
+        items = {item["key"]: item for item in response.json()["items"]}
+        self.assertEqual(items["QWEN_API_KEY"]["value"], "sk-a••••3456")
+        self.assertEqual(items["PORT"]["value"], "58000")
+
+    def test_ui_config_update_writes_env_and_process_env(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text("PORT=58000\n", encoding="utf-8")
+            with patch.object(server, "loaded_env_path", env_path):
+                response = self.client.put(
+                    "/api/ui/config",
+                    json={"values": {"PORT": "58001", "QWEN_API_KEY": "sk-new"}},
+                )
+
+            content = env_path.read_text(encoding="utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("PORT=58001", content)
+        self.assertIn("QWEN_API_KEY=sk-new", content)
+        self.assertEqual(server.os.environ.get("PORT"), "58001")
+        self.assertEqual(server.os.environ.get("QWEN_API_KEY"), "sk-new")
+
+    def test_ui_certificate_trigger_creates_task(self):
+        server._feishu_handler_client = Mock()
+
+        class ImmediateThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with patch("app.server.threading.Thread", ImmediateThread), patch(
+            "app.message_handler.claim_record_processing", return_value=True
+        ), patch("app.message_handler.finish_record_processing"), patch(
+            "app.message_handler.process_record_message"
+        ) as process_record_message:
+            response = self.client.post("/api/ui/certificate/trigger", json={"record_id": "rec_ui_cert"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workflow"], "certificate")
+        self.assertIn("task_id", response.json())
+        process_record_message.assert_called_once()
+
+    def test_ui_photo_ai_trigger_creates_task(self):
+        server._feishu_handler_client = Mock()
+
+        class ImmediateThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with patch("app.server.threading.Thread", ImmediateThread), patch(
+            "app.message_handler.claim_record_processing", return_value=True
+        ), patch("app.message_handler.finish_record_processing"), patch(
+            "app.photo_ai_handler.process_photo_ai_record"
+        ) as process_photo_ai_record:
+            response = self.client.post("/api/ui/photo-ai/trigger", json={"record_id": "rec_ui_photo"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workflow"], "photo_ai")
+        self.assertIn("task_id", response.json())
+        process_photo_ai_record.assert_called_once()
 
     def test_empty_people_returns_400(self):
         payload = self.build_payload()

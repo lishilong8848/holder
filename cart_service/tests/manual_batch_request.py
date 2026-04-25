@@ -1,16 +1,41 @@
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 
-DEFAULT_URL = "http://127.0.0.1:58000/api/v1/query/batch"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PAYLOAD_CANDIDATES = (
-    Path(__file__).resolve().parents[1] / "payload.local.json",
-    Path(__file__).resolve().parents[1] / "payload.json",
+    PROJECT_ROOT / "payload.local.json",
+    PROJECT_ROOT / "payload.json",
 )
+
+
+def load_env_port() -> str:
+    port = os.environ.get("PORT", "").strip()
+    if port:
+        return port
+
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.is_file():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            clean_line = line.strip()
+            if not clean_line or clean_line.startswith("#") or "=" not in clean_line:
+                continue
+            key, value = clean_line.split("=", 1)
+            if key.strip() == "PORT":
+                port = value.strip().strip('"').strip("'")
+                if port:
+                    return port
+
+    raise RuntimeError("未配置 PORT，请在 .env 中设置 PORT")
+
+
+def default_url() -> str:
+    return f"http://127.0.0.1:{load_env_port()}/api/v1/query/batch"
 
 
 def resolve_default_payload_path() -> Path:
@@ -72,8 +97,9 @@ def print_summary(response_json):
 
 
 def main():
+    resolved_default_url = default_url()
     parser = argparse.ArgumentParser(description="批量查询接口手工联调脚本")
-    parser.add_argument("--url", default=DEFAULT_URL, help=f"接口地址，默认：{DEFAULT_URL}")
+    parser.add_argument("--url", default=resolved_default_url, help=f"接口地址，默认：{resolved_default_url}")
     parser.add_argument(
         "--payload-file",
         help=f"自定义请求体 JSON，默认会按顺序尝试：{', '.join(str(path) for path in DEFAULT_PAYLOAD_CANDIDATES)}",

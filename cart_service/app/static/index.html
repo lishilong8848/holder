@@ -1,1571 +1,788 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高低压证书自动化查询系统</title>
-
-    <!-- Fonts & Icons -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
-        rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
-
-    <style>
-        :root {
-            /* Palette: Slate & Indigo */
-            --primary: #4f46e5;
-            --primary-hover: #4338ca;
-            --primary-light: #e0e7ff;
-
-            --bg-body: #f8fafc;
-            --bg-card: #ffffff;
-            --bg-input: #f1f5f9;
-            --bg-console: #0f172a;
-
-            --text-main: #1e293b;
-            --text-muted: #64748b;
-            --text-light: #94a3b8;
-            --text-console: #e2e8f0;
-
-            --border: #e2e8f0;
-            --border-focus: #4f46e5;
-
-            --success: #10b981;
-            --error: #ef4444;
-            --warning: #f59e0b;
-
-            --radius-sm: 0.375rem;
-            --radius-md: 0.5rem;
-            --radius-lg: 0.75rem;
-
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: 'Inter', "Microsoft YaHei", sans-serif;
-            background-color: var(--bg-body);
-            color: var(--text-main);
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        /* Header */
-        header {
-            background: var(--bg-card);
-            border-bottom: 1px solid var(--border);
-            padding: 1rem 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            box-shadow: var(--shadow-sm);
-            z-index: 10;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            font-weight: 700;
-            font-size: 1.25rem;
-            color: var(--text-main);
-        }
-
-        .brand i {
-            font-size: 1.5rem;
-            color: var(--primary);
-        }
-
-        .top-status {
-            display: flex;
-            gap: 1.5rem;
-            font-size: 0.875rem;
-            color: var(--text-muted);
-        }
-
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background-color: var(--text-light);
-        }
-
-        .status-dot.active {
-            background-color: var(--success);
-            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
-        }
-
-        .status-dot.busy {
-            background-color: var(--primary);
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% {
-                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4);
-            }
-
-            70% {
-                box-shadow: 0 0 0 6px rgba(79, 70, 229, 0);
-            }
-
-            100% {
-                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
-            }
-        }
-
-        /* Main Layout */
-        main {
-            flex: 1;
-            display: grid;
-            grid-template-columns: 380px 1fr;
-            gap: 0;
-            height: calc(100vh - 65px);
-            /* Minus header height */
-        }
-
-        /* Sidebar - Config */
-        .sidebar {
-            background: var(--bg-card);
-            border-right: 1px solid var(--border);
-            padding: 1.5rem;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
-
-        .section-title {
-            text-transform: uppercase;
-            font-size: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-            margin-bottom: 0.75rem;
-        }
-
-        /* Forms */
-        .form-group {
-            margin-bottom: 1rem;
-            position: relative;
-        }
-
-        .form-label {
-            display: block;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: var(--text-main);
-            margin-bottom: 0.375rem;
-        }
-
-        .input-wrapper {
-            position: relative;
-        }
-
-        .input-wrapper i {
-            position: absolute;
-            left: 0.75rem;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-light);
-            pointer-events: none;
-            transition: color 0.2s;
-        }
-
-        input[type="text"],
-        input[type="password"],
-        input[type="number"] {
-            width: 100%;
-            padding: 0.625rem 0.75rem 0.625rem 2.25rem;
-            /* Left padding for icon */
-            font-family: inherit;
-            font-size: 0.9rem;
-            color: var(--text-main);
-            background-color: var(--bg-input);
-            border: 1px solid transparent;
-            border-radius: var(--radius-md);
-            transition: all 0.2s;
-        }
-
-        input:focus {
-            outline: none;
-            background-color: var(--bg-card);
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px var(--primary-light);
-        }
-
-        input:focus+i {
-            color: var(--primary);
-        }
-
-        /* Radio & Toggle */
-        .radio-group {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-            background: var(--bg-input);
-            padding: 0.25rem;
-            border-radius: var(--radius-md);
-        }
-
-        .radio-label {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.375rem;
-            padding: 0.5rem;
-            font-size: 0.875rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            cursor: pointer;
-            border-radius: var(--radius-sm);
-            transition: all 0.2s;
-            user-select: none;
-        }
-
-        .radio-label:hover {
-            color: var(--text-main);
-        }
-
-        input[type="radio"] {
-            display: none;
-        }
-
-        input[type="radio"]:checked+.radio-label {
-            background-color: var(--bg-card);
-            color: var(--primary);
-            box-shadow: var(--shadow-sm);
-        }
-
-        /* Toggle Switch */
-        .toggle-wrapper {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem;
-            background: var(--bg-input);
-            border-radius: var(--radius-md);
-            cursor: pointer;
-        }
-
-        .toggle-text {
-            font-size: 0.875rem;
-            font-weight: 500;
-        }
-
-        .toggle-switch {
-            position: relative;
-            width: 44px;
-            height: 24px;
-            background: #cbd5e1;
-            border-radius: 99px;
-            transition: 0.3s;
-        }
-
-        .toggle-switch::after {
-            content: '';
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 20px;
-            height: 20px;
-            background: #fff;
-            border-radius: 50%;
-            transition: 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-        }
-
-        input[type="checkbox"] {
-            display: none;
-        }
-
-        input[type="checkbox"]:checked+.toggle-switch {
-            background: var(--primary);
-        }
-
-        input[type="checkbox"]:checked+.toggle-switch::after {
-            transform: translateX(20px);
-        }
-
-        /* Buttons */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.5rem;
-            width: 100%;
-            padding: 0.75rem 1rem;
-            font-size: 0.9375rem;
-            font-weight: 600;
-            border-radius: var(--radius-md);
-            border: none;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .btn-primary {
-            background-color: var(--primary);
-            color: white;
-            box-shadow: 0 4px 6px -1px rgba(79, 70, 229, 0.2);
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            background-color: var(--primary-hover);
-            transform: translateY(-1px);
-            box-shadow: 0 6px 8px -1px rgba(79, 70, 229, 0.3);
-        }
-
-        .btn-secondary {
-            background-color: transparent;
-            color: var(--text-muted);
-            border: 1px solid var(--border);
-        }
-
-        .btn-secondary:hover:not(:disabled) {
-            background-color: var(--bg-input);
-            color: var(--text-main);
-            border-color: var(--text-light);
-        }
-
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        /* Content Area - Terminal */
-        .content-area {
-            display: flex;
-            flex-direction: column;
-            padding: 1.5rem;
-            background: var(--bg-body);
-            overflow: hidden;
-        }
-
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-        }
-
-        .panel-title {
-            font-weight: 600;
-            font-size: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .terminal-window {
-            flex: 1;
-            background: var(--bg-console);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            border: 1px solid #334155;
-        }
-
-        .terminal-header {
-            background: #1e293b;
-            padding: 0.5rem 1rem;
-            border-bottom: 1px solid #334155;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .terminal-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-        }
-
-        .dot-red {
-            background: #ef4444;
-        }
-
-        .dot-yellow {
-            background: #f59e0b;
-        }
-
-        .dot-green {
-            background: #10b981;
-        }
-
-        .terminal-title {
-            margin-left: 0.5rem;
-            color: #94a3b8;
-            font-size: 0.75rem;
-            font-family: 'JetBrains Mono', monospace;
-        }
-
-        .terminal-body {
-            flex: 1;
-            padding: 1rem;
-            overflow-y: auto;
-            color: var(--text-console);
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.85rem;
-            line-height: 1.6;
-            white-space: pre-wrap;
-        }
-
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 3px;
-        }
-
-        .terminal-body::-webkit-scrollbar-thumb {
-            background: #475569;
-        }
-
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-md);
-            padding: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            transition: transform 0.2s;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
-        }
-
-        .stat-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.25rem;
-        }
-
-        .stat-info .label {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            font-weight: 600;
-        }
-
-        .stat-info .value {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--text-main);
-            margin-top: 0.125rem;
-        }
-
-        .icon-blue {
-            background: #eff6ff;
-            color: #3b82f6;
-        }
-
-        .icon-green {
-            background: #ecfdf5;
-            color: #10b981;
-        }
-
-        .icon-red {
-            background: #fef2f2;
-            color: #ef4444;
-        }
-
-
-        /* Modal & Animations */
-        @keyframes modalFadeIn {
-            from {
-                opacity: 0;
-            }
-
-            to {
-                opacity: 1;
-            }
-        }
-
-        @keyframes modalSlideUp {
-            from {
-                opacity: 0;
-                transform: scale(0.95) translateY(10px);
-            }
-
-            to {
-                opacity: 1;
-                transform: scale(1) translateY(0);
-            }
-        }
-
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(15, 23, 42, 0.6);
-            /* Slate-900 with opacity */
-            backdrop-filter: blur(8px);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 100;
-            animation: modalFadeIn 0.3s ease-out forwards;
-        }
-
-        .modal-content {
-            background: rgba(255, 255, 255, 0.95);
-            width: 90%;
-            max-width: 900px;
-            height: 85%;
-            border-radius: var(--radius-lg);
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            animation: modalSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-            overflow: hidden;
-        }
-
-        .modal-header {
-            padding: 1.25rem 2rem;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: rgba(248, 250, 252, 0.5);
-        }
-
-        .modal-header h3 {
-            font-size: 1.25rem;
-            font-weight: 600;
-            color: var(--text-main);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .modal-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 0;
-        }
-
-        .icon-btn {
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: all 0.2s;
-            box-shadow: var(--shadow-sm);
-        }
-
-        .icon-btn:hover {
-            color: var(--error);
-            border-color: #fecaca;
-            background: #fef2f2;
-            transform: rotate(90deg);
-        }
-
-        /* Premium Table */
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.875rem;
-        }
-
-        .data-table th {
-            background: #f8fafc;
-            color: var(--text-secondary);
-            font-weight: 600;
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            backdrop-filter: blur(4px);
-        }
-
-        .data-table td {
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-main);
-            transition: background 0.15s;
-        }
-
-        .data-table tr:hover td {
-            background: #f8fafc;
-        }
-
-        .data-table tr:last-child td {
-            border-bottom: none;
-        }
-
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.125rem 0.5rem;
-            border-radius: 99px;
-            font-size: 0.75rem;
-            font-weight: 500;
-        }
-
-        .status-pending {
-            background: #f1f5f9;
-            color: #64748b;
-        }
-
-        .status-success {
-            background: #ecfdf5;
-            color: #10b981;
-        }
-
-        .status-error {
-            background: #fef2f2;
-            color: #ef4444;
-        }
-
-        .cert-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 2px;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            margin-right: 4px;
-            border: 1px solid transparent;
-        }
-
-        .cert-badge.status-success {
-            background: #f0fdf4;
-            border-color: #bbf7d0;
-            color: #166534;
-        }
-
-        .cert-badge.status-error {
-            background: #fef2f2;
-            border-color: #fecaca;
-            color: #991b1b;
-        }
-
-        .cert-badge.status-pending {
-            background: #f8fafc;
-            border-color: #e2e8f0;
-            color: #64748b;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>施工安全自动化控制台</title>
+  <style>
+    :root {
+      --ink: #142019;
+      --ink-soft: #30453a;
+      --muted: #64736a;
+      --paper: #f7f3e8;
+      --paper-2: #eef6ee;
+      --panel: rgba(255, 255, 255, 0.78);
+      --panel-solid: #fffdf8;
+      --line: rgba(20, 32, 25, 0.13);
+      --line-strong: rgba(20, 32, 25, 0.22);
+      --brand: #0f766e;
+      --brand-2: #1f9d8a;
+      --soil: #9a6b22;
+      --amber: #b7791f;
+      --red: #b42318;
+      --green: #15803d;
+      --blue: #1d4ed8;
+      --violet: #6d28d9;
+      --shadow: 0 28px 70px rgba(20, 32, 25, 0.14);
+      --shadow-soft: 0 16px 35px rgba(20, 32, 25, 0.10);
+      --radius-xl: 30px;
+      --radius: 20px;
+      --radius-sm: 14px;
+      --mono: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+      --sans: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: var(--sans);
+      background:
+        linear-gradient(rgba(255,255,255,0.28) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.28) 1px, transparent 1px),
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.22), transparent 33rem),
+        radial-gradient(circle at 78% 0%, rgba(154, 107, 34, 0.18), transparent 28rem),
+        linear-gradient(135deg, #f6f1e3 0%, #edf7ef 52%, #faf8ee 100%);
+      background-size: 44px 44px, 44px 44px, auto, auto, auto;
+    }
+
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 286px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      padding: 24px 18px;
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.58);
+      backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 4px 4px 26px;
+    }
+
+    .brand-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.18), transparent),
+        linear-gradient(135deg, #0f766e, #9a6b22);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      letter-spacing: 0.06em;
+      box-shadow: 0 18px 35px rgba(15, 118, 110, 0.26);
+    }
+
+    .brand h1 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+    .brand p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+
+    .nav { display: grid; gap: 8px; }
+
+    .nav button {
+      width: 100%;
+      min-height: 48px;
+      border: 1px solid transparent;
+      border-radius: 16px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      padding: 0 14px;
+      transition: 180ms ease;
+      font-weight: 700;
+    }
+
+    .nav button:hover,
+    .nav button.active {
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.13), rgba(154, 107, 34, 0.08));
+      border-color: rgba(15, 118, 110, 0.2);
+      color: var(--brand);
+      box-shadow: 0 10px 24px rgba(15, 118, 110, 0.08);
+    }
+
+    .side-card {
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.66);
+    }
+
+    .side-card .label { color: var(--muted); font-size: 12px; }
+    .side-card .value { margin-top: 8px; font-family: var(--mono); font-size: 12px; word-break: break-all; line-height: 1.55; }
+
+    .main {
+      padding: 26px;
+      min-width: 0;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin-bottom: 7px;
+    }
+
+    .topbar h2 { margin: 0; font-size: clamp(26px, 3vw, 42px); letter-spacing: -0.055em; line-height: 1.05; }
+    .topbar p { margin: 10px 0 0; color: var(--muted); line-height: 1.6; }
+
+    .top-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.75);
+      padding: 9px 13px;
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--green); box-shadow: 0 0 0 5px rgba(21,128,61,0.12); }
+    .dot.warn { background: var(--amber); box-shadow: 0 0 0 5px rgba(183,121,31,0.15); }
+    .dot.bad { background: var(--red); box-shadow: 0 0 0 5px rgba(180,35,24,0.12); }
+
+    .view { display: none; animation: rise 240ms ease; }
+    .view.active { display: block; }
+
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    .grid { display: grid; gap: 16px; }
+    .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .two { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(15, 118, 110, 0.22);
+      border-radius: var(--radius-xl);
+      background:
+        linear-gradient(115deg, rgba(15, 118, 110, 0.96), rgba(25, 91, 78, 0.92) 52%, rgba(154, 107, 34, 0.84)),
+        linear-gradient(90deg, transparent, rgba(255,255,255,0.18));
+      color: white;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      margin-bottom: 16px;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: -40% -10% auto auto;
+      width: 420px;
+      height: 420px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 62%);
+      pointer-events: none;
+    }
+
+    .hero-content { position: relative; z-index: 1; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 24px; align-items: end; }
+    .hero h3 { margin: 0; font-size: clamp(28px, 4vw, 48px); letter-spacing: -0.06em; line-height: 1.02; }
+    .hero p { margin: 14px 0 0; color: rgba(255,255,255,0.82); max-width: 720px; line-height: 1.7; }
+    .hero-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .hero-kpi { border: 1px solid rgba(255,255,255,0.22); background: rgba(255,255,255,0.12); border-radius: 18px; padding: 13px; backdrop-filter: blur(10px); }
+    .hero-kpi .num { font-size: 26px; font-weight: 900; letter-spacing: -0.05em; }
+    .hero-kpi .txt { margin-top: 4px; color: rgba(255,255,255,0.74); font-size: 12px; }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow-soft);
+      padding: 20px;
+      backdrop-filter: blur(16px);
+    }
+
+    .card.tight { padding: 16px; }
+    .card h3 { margin: 0 0 12px; font-size: 17px; letter-spacing: -0.02em; }
+    .card p { color: var(--muted); line-height: 1.65; }
+
+    .metric { position: relative; overflow: hidden; min-height: 126px; }
+    .metric::after { content: ""; position: absolute; right: -24px; top: -30px; width: 105px; height: 105px; border-radius: 50%; background: rgba(15,118,110,0.09); }
+    .metric .label { color: var(--muted); font-size: 13px; font-weight: 700; }
+    .metric .value { margin-top: 10px; font-size: 36px; font-weight: 900; letter-spacing: -0.06em; }
+    .metric .hint { margin-top: 8px; color: var(--muted); font-size: 12px; }
+
+    .form-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+    .field { display: grid; gap: 8px; }
+    label { color: var(--muted); font-size: 13px; font-weight: 700; }
+
+    input, textarea {
+      width: 100%;
+      min-height: 46px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,255,0.88);
+      color: var(--ink);
+      padding: 12px 13px;
+      outline: none;
+      transition: 180ms ease;
+    }
+
+    input:focus, textarea:focus { border-color: rgba(15,118,110,0.58); box-shadow: 0 0 0 4px rgba(15,118,110,0.1); }
+
+    .btn {
+      border: 0;
+      border-radius: 15px;
+      min-height: 46px;
+      padding: 0 18px;
+      background: linear-gradient(135deg, var(--brand), var(--brand-2));
+      color: white;
+      font-weight: 800;
+      cursor: pointer;
+      transition: 180ms ease;
+      box-shadow: 0 14px 28px rgba(15, 118, 110, 0.22);
+    }
+
+    .btn:hover { transform: translateY(-1px); filter: brightness(0.98); }
+    .btn.secondary { background: rgba(20,32,25,0.08); color: var(--ink); box-shadow: none; }
+    .btn.secondary:hover { background: rgba(20,32,25,0.13); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+    .table-wrap { overflow: auto; border-radius: 18px; border: 1px solid var(--line); background: rgba(255,255,255,0.54); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td { padding: 13px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; font-weight: 900; background: rgba(255,255,255,0.74); position: sticky; top: 0; z-index: 2; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr { cursor: pointer; transition: 140ms ease; }
+    tbody tr:hover { background: rgba(15,118,110,0.07); }
+
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 900; white-space: nowrap; }
+    .badge.running, .badge.pending { background: rgba(29,78,216,0.1); color: var(--blue); }
+    .badge.success { background: rgba(21,128,61,0.1); color: var(--green); }
+    .badge.failed { background: rgba(180,35,24,0.1); color: var(--red); }
+    .badge.ended { background: rgba(71,85,105,0.12); color: #475569; }
+
+    .progress {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(20,32,25,0.09);
+      overflow: hidden;
+      margin-top: 10px;
+    }
+
+    .bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--brand), #c18b2e); transition: width 220ms ease; }
+
+    .detail-list { display: grid; gap: 9px; max-height: 360px; overflow: auto; padding-right: 2px; }
+    .detail-item { display: flex; justify-content: space-between; gap: 12px; padding: 12px 13px; border: 1px solid var(--line); border-radius: 15px; background: rgba(255,255,255,0.66); }
+    .detail-item small { color: var(--muted); line-height: 1.5; }
+
+    .task-summary {
+      display: grid;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(255,255,255,0.58);
+    }
+
+    .config-grid { display: grid; grid-template-columns: 230px minmax(0, 1fr) 92px; gap: 10px; align-items: center; }
+    .config-grid > div { padding: 6px 0; }
+    .config-key { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+    .logs {
+      height: 520px;
+      overflow: auto;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #132019, #0f1712);
+      color: #dbf5e5;
+      padding: 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+    }
+
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); }
+    .spaced { margin-top: 16px; }
+    .mini { font-size: 12px; }
+
+    .empty {
+      border: 1px dashed var(--line-strong);
+      border-radius: 18px;
+      padding: 22px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.42);
+      text-align: center;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+
+    @media (max-width: 1180px) {
+      .stats, .hero-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero-content, .two, .three { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 920px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { flex-direction: column; }
+      .top-actions { justify-content: flex-start; }
+    }
+
+    @media (max-width: 560px) {
+      .main, .sidebar { padding: 16px; }
+      .form-row, .config-grid, .stats, .hero-kpis { grid-template-columns: 1fr; }
+      .nav { grid-template-columns: 1fr; }
+      table { min-width: 660px; }
+      .hero { padding: 20px; }
+    }
+  </style>
 </head>
-
 <body>
-
-    <header>
-        <div class="brand">
-            <i class="ri-shield-check-fill"></i>
-            <span>自动查询 <small
-                    style="font-weight: 400; color: var(--text-muted); font-size: 0.8em; margin-left: 0.3em;">系统</small></span>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">安</div>
+        <div>
+          <h1>施工安全控制台</h1>
+          <p>查证 · 照片识别 · 飞书监听</p>
         </div>
-        <div class="top-status">
-            <div class="status-item">
-                <div class="status-dot" id="serverStatusDot"></div>
-                <span id="serverStatusText">连接中...</span>
-            </div>
-            <div class="status-item">
-                <i class="ri-time-line"></i>
-                <span id="currentTime">--:--</span>
-            </div>
-            <button onclick="toggleHistoryModal()" class="btn btn-secondary"
-                style="width: auto; padding: 0.25rem 0.5rem; font-size: 1.1rem; border-color: transparent; margin-left: 0.5rem;">
-                <i class="ri-history-line"></i>
-            </button>
-            <button onclick="toggleSettingsModal()" class="btn btn-secondary"
-                style="width: auto; padding: 0.25rem 0.5rem; font-size: 1.1rem; border-color: transparent;">
-                <i class="ri-settings-4-line"></i>
-            </button>
-            <button onclick="shutdownSystem()" class="btn btn-secondary"
-                style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.8rem; margin-left: 0.5rem; border-color: var(--error); color: var(--error);">
-                <i class="ri-shut-down-line"></i> 退出系统
-            </button>
+      </div>
+      <nav class="nav" aria-label="模块导航">
+        <button class="active" data-view="overview">总览驾驶舱</button>
+        <button data-view="certificate">证书查证</button>
+        <button data-view="photoAi">照片识别</button>
+        <button data-view="listener">群消息监听</button>
+        <button data-view="history">历史与日志</button>
+        <button data-view="config">配置管理</button>
+      </nav>
+      <div class="side-card">
+        <div class="label">服务地址</div>
+        <div class="value" id="serviceAddress">--</div>
+      </div>
+      <div class="side-card">
+        <div class="label">配置文件</div>
+        <div class="value" id="configPath">--</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">本地运维控制台</div>
+          <h2 id="viewTitle">总览驾驶舱</h2>
+          <p id="viewSubtitle">查看服务状态、任务进展和最近结果。</p>
         </div>
-    </header>
+        <div class="top-actions">
+          <div class="pill"><span class="dot" id="statusDot"></span><span id="statusText">连接中</span></div>
+          <button class="btn secondary" type="button" onclick="refreshAll()">刷新</button>
+        </div>
+      </header>
 
-    <main>
-        <!-- Sidebar -->
-        <div class="sidebar">
-            <div style="flex: 1;">
-                <div class="section-title">公开 API 说明</div>
-                <div
-                    style="background: var(--bg-input); padding: 0.75rem; border-radius: 8px; font-size: 0.8rem; border: 1px dashed var(--primary); margin-bottom: 1.5rem;">
-                    <p style="margin-bottom: 0.5rem; font-weight: 600; color: var(--primary);">
-                        <i class="ri-links-line"></i> 同步查询接口
-                    </p>
-                    <p style="color: var(--text-muted); font-size: 0.75rem; margin-bottom: 0.8rem; line-height: 1.4;">
-                        外部系统可直接调用此接口。调用时请将下方 URL 中的 <code id="hostHint">127.0.0.1</code> 替换为本机的局域网 IP。
-                    </p>
-
-                    <div style="margin-bottom: 0.8rem;">
-                        <span
-                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">请求路径:</span>
-                        <code style="background: #e2e8f0; padding: 0.2rem 0.4rem; border-radius: 4px; font-weight: 600;"
-                            id="apiUrlHint">http://127.0.0.1:58000/api/v1/query/batch</code>
-                    </div>
-
-                    <div style="margin-bottom: 0.8rem;">
-                        <span
-                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">参数格式:</span>
-                        <div
-                            style="background: #1e293b; color: #94a3b8; padding: 0.5rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem;">
-                            {<br>
-                            &nbsp;&nbsp;"people": [<br>
-                            &nbsp;&nbsp;&nbsp;&nbsp;{"name": "姓名", "id_number": "身份证号"}<br>
-                            &nbsp;&nbsp;]<br>
-                            }
-                        </div>
-                    </div>
-
-                    <div style="margin-bottom: 0.3rem;">
-                        <span
-                            style="display: block; font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.25rem;">CURL
-                            示例:</span>
-                        <div
-                            style="background: #1e293b; color: #e2e8f0; padding: 0.5rem; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; white-space: normal; word-break: break-all;">
-                            <code>curl -X POST "<span class="current-origin"></span>/api/v1/query/batch" -H "Content-Type: application/json" -d '{"people":[{"name":"李世龙","id_number":"..."}]}'</code>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="section-title">同步查询控制</div>
-                <div class="form-group">
-                    <div class="radio-group" style="margin-bottom: 0.75rem;">
-                        <label>
-                            <input type="radio" name="query_mode" value="all" checked onchange="toggleCountInput()">
-                            <span class="radio-label"><i class="ri-stack-line"></i> 查询全部</span>
-                        </label>
-                        <label>
-                            <input type="radio" name="query_mode" value="count" onchange="toggleCountInput()">
-                            <span class="radio-label"><i class="ri-numbers-line"></i> 指定数量</span>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="form-group" id="count_input_group" style="display: none;">
-                    <label class="form-label">数量限制</label>
-                    <div class="input-wrapper">
-                        <input type="number" id="query_count" value="5" min="1">
-                        <i class="ri-hashtag"></i>
-                    </div>
-                </div>
+      <section class="view active" id="overview">
+        <div class="hero">
+          <div class="hero-content">
+            <div>
+              <div class="eyebrow" style="color:rgba(255,255,255,.72)">施工安全自动化</div>
+              <h3>把查证、照片识别和群消息触发放到一个工作台。</h3>
+              <p>任务按模块独立展示，进度细到人员和图片。用于本机运行、现场排查和配置维护。</p>
             </div>
-
-            <div style="margin-top: auto; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-                <div class="section-title">手动测试 (API 路由调试)</div>
-                <textarea id="batch_people_input" placeholder='[{"name": "李世龙", "id_number": "1301...X"}]'
-                    style="width: 100%; height: 80px; padding: 0.5rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-input); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; margin-bottom: 0.75rem; resize: none;"></textarea>
-                <button id="batchStartBtn" class="btn btn-secondary" onclick="startBatchTask()"
-                    style="margin-bottom: 1.5rem; background-color: var(--primary-light); border-color: transparent; color: var(--primary);">
-                    <i class="ri-terminal-line"></i> 通过 API 执行查询
-                </button>
-
-                <button id="startBtn" class="btn btn-primary" onclick="startTask()" style="height: 48px;">
-                    <i class="ri-refresh-line"></i> 开启飞书同步任务
-                </button>
+            <div class="hero-kpis">
+              <div class="hero-kpi"><div class="num" id="heroRunning">0</div><div class="txt">运行中</div></div>
+              <div class="hero-kpi"><div class="num" id="heroSuccess">0</div><div class="txt">成功任务</div></div>
+              <div class="hero-kpi"><div class="num" id="heroFailed">0</div><div class="txt">失败任务</div></div>
             </div>
+          </div>
         </div>
 
-        <!-- Content Area -->
-        <div class="content-area">
-
-            <!-- Personnel List Controls -->
-            <div style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between;">
-                <button class="btn btn-secondary" onclick="togglePersonnelModal()" style="width: auto;">
-                    <i class="ri-team-line"></i> 飞书人员列表 (<span id="personnelCount">0</span>)
-                </button>
-                <button id="showBatchResultBtn" class="btn btn-secondary" onclick="toggleBatchResultModal()"
-                    style="width: auto; display: none; border-color: var(--success); color: var(--success);">
-                    <i class="ri-table-line"></i> 查看批量查询结果 (<span id="batchResultCount">0</span>)
-                </button>
-            </div>
-
-            <!-- Personnel Modal -->
-            <div id="personnelModal" class="modal-overlay" style="display: none;">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h3>飞书人员查询详情</h3>
-                        <button class="icon-btn" onclick="togglePersonnelModal()"><i class="ri-close-line"></i></button>
-                    </div>
-                    <div class="modal-body">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th style="width: 50px;">序号</th>
-                                    <th>姓名</th>
-                                    <th>员工工号</th>
-                                    <th>岗位</th>
-                                    <th>身份证号</th>
-                                    <th>证书情况</th>
-                                </tr>
-                            </thead>
-                            <tbody id="personnelTableBody">
-                                <!-- Populated via JS -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Batch Result Modal -->
-            <div id="batchResultModal" class="modal-overlay" style="display: none;">
-                <div class="modal-content" style="max-width: 1200px;">
-                    <div class="modal-header">
-                        <h3>批量查询结果表格</h3>
-                        <button class="icon-btn" onclick="toggleBatchResultModal()"><i
-                                class="ri-close-line"></i></button>
-                    </div>
-                    <div class="modal-body">
-                        <div
-                            style="padding: 1rem; background: #fff; position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--border); display: flex; justify-content: flex-end;">
-                            <button class="btn btn-secondary" onclick="exportBatchToCSV()"
-                                style="width: auto; font-size: 0.8rem;">
-                                <i class="ri-download-2-line"></i> 导出 CSV
-                            </button>
-                        </div>
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>姓名</th>
-                                    <th>初领日期</th>
-                                    <th>性别</th>
-                                    <th>应复审日期</th>
-                                    <th>作业类别</th>
-                                    <th>有效期开始日期</th>
-                                    <th>操作项目</th>
-                                    <th>有效期结束日期</th>
-                                    <th>签发机关</th>
-                                    <th>实际复审日期</th>
-                                    <th>复审单位</th>
-                                </tr>
-                            </thead>
-                            <tbody id="batchResultTableBody">
-                                <!-- Populated via JS -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-
-
-            <!-- Shutdown Modal -->
-            <div id="shutdownModal" class="modal-overlay" style="display: none;">
-                <div class="modal-content"
-                    style="max-width: 400px; height: auto; border: 1px solid #fecaca; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
-                    <div class="modal-header" style="background: #fef2f2; border-bottom: 1px solid #fee2e2;">
-                        <h3 style="color: #991b1b;"><i class="ri-alert-fill" style="color: #ef4444;"></i> 确认退出</h3>
-                        <button class="icon-btn" onclick="toggleShutdownModal()"><i class="ri-close-line"></i></button>
-                    </div>
-                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
-                        <p style="color: var(--text-main); font-size: 1rem; margin-bottom: 0.5rem; font-weight: 500;">
-                            确定要停止服务并退出系统吗？</p>
-                        <p style="color: var(--text-muted); font-size: 0.875rem;">此操作将关闭服务器并清理所有浏览器进程。</p>
-
-                        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                            <button class="btn btn-secondary" onclick="toggleShutdownModal()">取消</button>
-                            <button class="btn btn-primary" onclick="confirmShutdown()"
-                                style="background-color: #ef4444; border-color: #ef4444;">
-                                <i class="ri-shut-down-line"></i> 确认退出
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Batch Confirm Modal -->
-            <div id="batchConfirmModal" class="modal-overlay" style="display: none;">
-                <div class="modal-content"
-                    style="max-width: 400px; height: auto; border: 1px solid #bfdbfe; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
-                    <div class="modal-header" style="background: #eff6ff; border-bottom: 1px solid #dbeafe;">
-                        <h3 style="color: #1e40af;"><i class="ri-information-fill" style="color: #3b82f6;"></i> 确认开始批量查询
-                        </h3>
-                        <button class="icon-btn" onclick="toggleBatchConfirmModal()"><i
-                                class="ri-close-line"></i></button>
-                    </div>
-                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
-                        <p style="color: var(--text-main); font-size: 1rem; margin-bottom: 0.5rem; font-weight: 500;">
-                            确定要开始执行 API 同步查询吗？</p>
-                        <p style="color: var(--text-muted); font-size: 0.875rem;">系统将按照您输入的人员列表逐一进行同步查询。</p>
-
-                        <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                            <button class="btn btn-secondary" onclick="toggleBatchConfirmModal()">取消</button>
-                            <button class="btn btn-primary" onclick="confirmBatchStart()"
-                                style="background-color: #3b82f6; border-color: #3b82f6;">
-                                <i class="ri-play-line"></i> 立即开始
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Warning/Alert Modal -->
-            <div id="warningModal" class="modal-overlay" style="display: none;">
-                <div class="modal-content"
-                    style="max-width: 400px; height: auto; border: 1px solid #fde68a; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
-                    <div class="modal-header" style="background: #fffbeb; border-bottom: 1px solid #fef3c7;">
-                        <h3 style="color: #92400e;"><i class="ri-error-warning-fill" style="color: #f59e0b;"></i> <span
-                                id="warningTitle">提示</span></h3>
-                        <button class="icon-btn" onclick="toggleWarningModal()"><i class="ri-close-line"></i></button>
-                    </div>
-                    <div class="modal-body" style="padding: 1.5rem; text-align: center;">
-                        <p id="warningMessage"
-                            style="color: var(--text-main); font-size: 1rem; margin-bottom: 1.5rem; white-space: pre-wrap; line-height: 1.5;">
-                        </p>
-                        <div style="display: flex; justify-content: center;">
-                            <button class="btn btn-primary" onclick="toggleWarningModal()"
-                                style="background-color: #f59e0b; border-color: #f59e0b; width: auto; padding: 0.5rem 2rem;">
-                                知道了
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="panel-header">
-                <div class="panel-title">
-                    <i class="ri-terminal-box-line"></i>
-                    系统日志
-                </div>
-                <div id="downloadArea" style="display: none;">
-                    <a id="lastDownloadLink" href="#" class="btn btn-secondary"
-                        style="width: auto; padding: 0.25rem 0.75rem; font-size: 0.75rem; border-color: var(--success); color: var(--success); background: #f0fdf4;">
-                        <i class="ri-download-cloud-2-line"></i> 下载本次结果 (.xlsx)
-                    </a>
-                </div>
-            </div>
-
-            <div class="terminal-window" style="margin-bottom: 0;">
-                <div class="terminal-header">
-                    <div class="terminal-dot dot-red"></div>
-                    <div class="terminal-dot dot-yellow"></div>
-                    <div class="terminal-dot dot-green"></div>
-                    <div class="terminal-title">server_logs.log</div>
-                </div>
-                <div class="terminal-body" id="console">正在初始化日志连接...</div>
-            </div>
+        <div class="grid stats">
+          <div class="card metric"><div class="label">任务总数</div><div class="value" id="statTotal">0</div><div class="hint">历史持久化记录</div></div>
+          <div class="card metric"><div class="label">运行中</div><div class="value" id="statRunning">0</div><div class="hint">正在处理的记录</div></div>
+          <div class="card metric"><div class="label">成功</div><div class="value" id="statSuccess">0</div><div class="hint">完成回填或处理</div></div>
+          <div class="card metric"><div class="label">失败</div><div class="value" id="statFailed">0</div><div class="hint">需要排查的任务</div></div>
         </div>
-
-        <!-- Settings Modal -->
-        <div id="settingsModal" class="modal-overlay" style="display: none;">
-            <div class="modal-content" style="max-width: 500px; height: auto;">
-                <div class="modal-header">
-                    <h3>系统设置</h3>
-                    <button class="icon-btn" onclick="toggleSettingsModal()"><i class="ri-close-line"></i></button>
-                </div>
-                <div class="modal-body" style="padding: 1.5rem;">
-                    <div class="section-title">飞书 API 配置</div>
-                    <div class="form-group">
-                        <label class="form-label" for="app_id">App ID</label>
-                        <div class="input-wrapper">
-                            <input type="text" id="app_id" placeholder="cli_a4..." autocomplete="off">
-                            <i class="ri-key-2-line"></i>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="app_secret">App Secret</label>
-                        <div class="input-wrapper">
-                            <input type="password" id="app_secret" placeholder="••••••••" autocomplete="off">
-                            <i class="ri-lock-password-line"></i>
-                        </div>
-                    </div>
-
-                    <div class="section-title" style="margin-top: 1.5rem;">飞书表格配置</div>
-                    <div class="form-group">
-                        <label class="form-label" for="app_token">App Token</label>
-                        <div class="input-wrapper">
-                            <input type="text" id="app_token" placeholder="N0c..." autocomplete="off">
-                            <i class="ri-table-line"></i>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="table_id">Table ID</label>
-                        <div class="input-wrapper">
-                            <input type="text" id="table_id" placeholder="tbl..." autocomplete="off">
-                            <i class="ri-list-check"></i>
-                        </div>
-                    </div>
-
-                    <div class="section-title" style="margin-top: 1.5rem;">任务策略</div>
-                    <label class="toggle-wrapper" for="auto_update">
-                        <span class="toggle-text">完成后自动回填飞书</span>
-                        <input type="checkbox" id="auto_update" checked>
-                        <span class="toggle-switch"></span>
-                    </label>
-
-                    <div style="margin-top: 2rem;">
-                        <button id="saveConfigBtn" class="btn btn-primary" onclick="saveConfig()">
-                            <i class="ri-save-line"></i> 保存并应用配置
-                        </button>
-                    </div>
-                </div>
-            </div>
+        <div class="grid two spaced">
+          <div class="card">
+            <h3>系统状态</h3>
+            <div class="task-summary" id="systemStatusText">正在读取状态...</div>
+          </div>
+          <div class="card">
+            <h3>队列状态</h3>
+            <div class="task-summary" id="queueStatusText">正在读取队列...</div>
+          </div>
         </div>
-        <!-- History Modal -->
-        <div id="historyModal" class="modal-overlay" style="display: none;">
-            <div class="modal-content" style="max-width: 700px;">
-                <div class="modal-header">
-                    <h3>历史汇总表格</h3>
-                    <button class="icon-btn" onclick="toggleHistoryModal()"><i class="ri-close-line"></i></button>
-                </div>
-                <div class="modal-body">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>生成时间</th>
-                                <th>文件名称</th>
-                                <th>大小</th>
-                                <th style="width: 80px;">操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="historyTableBody">
-                            <!-- Populated via JS -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="card spaced">
+          <h3>最近任务</h3>
+          <div class="table-wrap"><table><thead><tr><th>时间</th><th>模块</th><th>记录编号</th><th>状态</th><th>进度</th><th>当前步骤</th></tr></thead><tbody id="recentTasksBody"></tbody></table></div>
         </div>
+      </section>
+
+      <section class="view" id="certificate">
+        <div class="grid two">
+          <div class="card">
+            <h3>手动触发特种作业查证</h3>
+            <p class="muted">输入卡片标题后面的记录编号，系统会读取施工单附件、解析表格文件、查询证书并回填。</p>
+            <div class="form-row">
+              <div class="field"><label for="certificateRecordId">记录编号</label><input id="certificateRecordId" placeholder="请输入记录编号"></div>
+              <button class="btn" id="certificateTriggerBtn">启动查证</button>
+            </div>
+            <p class="muted mini" id="certificateTriggerResult"></p>
+          </div>
+          <div class="card">
+            <h3>任务详情</h3>
+            <div id="certificateTaskDetail" class="empty">选择或启动一个证书任务后查看详情。</div>
+          </div>
+        </div>
+        <div class="card spaced"><h3>人员级进度</h3><div class="detail-list" id="certificateDetails"></div></div>
+      </section>
+
+      <section class="view" id="photoAi">
+        <div class="grid two">
+          <div class="card">
+            <h3>手动触发照片智能识别</h3>
+            <p class="muted">根据过程反馈字段自动判断识别施工过程照片或施工收尾照片，并把融合结果回填到多维表。</p>
+            <div class="form-row">
+              <div class="field"><label for="photoRecordId">记录编号</label><input id="photoRecordId" placeholder="请输入记录编号"></div>
+              <button class="btn" id="photoTriggerBtn">启动识别</button>
+            </div>
+            <p class="muted mini" id="photoTriggerResult"></p>
+          </div>
+          <div class="card">
+            <h3>任务详情</h3>
+            <div id="photoTaskDetail" class="empty">选择或启动一个照片识别任务后查看详情。</div>
+          </div>
+        </div>
+        <div class="card spaced"><h3>图片级进度</h3><div class="detail-list" id="photoDetails"></div></div>
+      </section>
+
+      <section class="view" id="listener">
+        <div class="grid two">
+          <div class="card"><h3>监听配置</h3><div class="task-summary" id="listenerInfo">正在读取...</div></div>
+          <div class="card"><h3>触发规则</h3><p>群卡片标题包含 <b>特种作业查证</b> 时进入证书查证；标题包含照片识别业务关键字时进入照片智能识别。两类任务按模块独立去重。</p></div>
+        </div>
+      </section>
+
+      <section class="view" id="history">
+        <div class="card">
+          <h3>任务历史</h3>
+          <div class="table-wrap"><table><thead><tr><th>任务编号</th><th>来源</th><th>模块</th><th>记录编号</th><th>状态</th><th>更新时间</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+        </div>
+        <div class="card spaced">
+          <h3>运行日志</h3>
+          <label><input type="checkbox" id="autoScrollLogs" checked style="width:auto;min-height:auto;"> 自动滚动到底部</label>
+          <div class="logs spaced" id="logsBox">正在加载日志...</div>
+        </div>
+      </section>
+
+      <section class="view" id="config">
+        <div class="card">
+          <h3>配置管理</h3>
+          <p class="muted">敏感字段默认脱敏显示。保存后会写入项目配置文件，并同步到当前进程；监听器、端口等配置可能需要重启服务后完全生效。</p>
+          <div class="config-grid spaced" id="configGrid"></div>
+          <button class="btn spaced" id="saveConfigBtn">保存配置</button>
+          <p class="muted mini" id="configResult"></p>
+        </div>
+      </section>
     </main>
-
-    <script>
-        // --- Conf Logic ---
-        function loadConfig() {
-            try {
-                const config = JSON.parse(localStorage.getItem('cert_query_config') || '{}');
-                if (config.app_id) document.getElementById('app_id').value = config.app_id;
-                if (config.app_secret) document.getElementById('app_secret').value = config.app_secret;
-                if (config.app_token) document.getElementById('app_token').value = config.app_token;
-                if (config.table_id) document.getElementById('table_id').value = config.table_id;
-                if (config.auto_update !== undefined) document.getElementById('auto_update').checked = config.auto_update;
-            } catch (e) { }
-        }
-
-        function saveConfig() {
-            const config = {
-                app_id: document.getElementById('app_id').value,
-                app_secret: document.getElementById('app_secret').value,
-                app_token: document.getElementById('app_token').value,
-                table_id: document.getElementById('table_id').value,
-                auto_update: document.getElementById('auto_update').checked
-            };
-            localStorage.setItem('cert_query_config', JSON.stringify(config));
-
-            // Visual feedback
-            const btn = document.getElementById('saveConfigBtn');
-            const originalHtml = btn.innerHTML;
-            btn.innerHTML = '<i class="ri-check-line"></i> 配置已保存';
-            setTimeout(() => {
-                btn.innerHTML = originalHtml;
-                toggleSettingsModal(); // Auto close
-            }, 800);
-        }
-
-        function toggleCountInput() {
-            const mode = document.querySelector('input[name="query_mode"]:checked').value;
-            document.getElementById('count_input_group').style.display = mode === 'count' ? 'block' : 'none';
-        }
-
-        function updateTime() {
-            const now = new Date();
-            document.getElementById('currentTime').innerText = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        }
-        setInterval(updateTime, 1000);
-        updateTime();
-
-        // --- Personnel Table Logic ---
-        function togglePersonnelModal() {
-            const modal = document.getElementById('personnelModal');
-            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        function toggleSettingsModal() {
-            const modal = document.getElementById('settingsModal');
-            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        function toggleHistoryModal() {
-            const modal = document.getElementById('historyModal');
-            const isShowing = modal.style.display !== 'none';
-            modal.style.display = isShowing ? 'none' : 'flex';
-            if (!isShowing) fetchHistory();
-        }
-
-        function toggleBatchConfirmModal() {
-            const modal = document.getElementById('batchConfirmModal');
-            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        function toggleWarningModal() {
-            const modal = document.getElementById('warningModal');
-            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        function showWarning(title, message) {
-            document.getElementById('warningTitle').innerText = title;
-            document.getElementById('warningMessage').innerText = message;
-            toggleWarningModal();
-        }
-
-        async function fetchHistory() {
-            const tbody = document.getElementById('historyTableBody');
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">正在加载...</td></tr>';
-            try {
-                const response = await fetch('/api/history');
-                const files = await response.json();
-                if (files.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--text-muted);">暂无历史记录</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = files.map(f => `
-                    <tr>
-                        <td style="font-size: 0.8rem; color: var(--text-muted);">${f.created_at}</td>
-                        <td style="font-weight: 500;">${f.filename}</td>
-                        <td style="font-size: 0.75rem;">${f.size}</td>
-                        <td>
-                            <a href="/api/download/${encodeURIComponent(f.filename)}" class="btn btn-secondary" style="width: auto; padding: 0.15rem 0.5rem; font-size: 0.7rem;">
-                                <i class="ri-download-2-line"></i> 下载
-                            </a>
-                        </td>
-                    </tr>
-                `).join('');
-            } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color: var(--error);">加载失败</td></tr>';
-            }
-        }
-
-        function updatePersonnelTable(people) {
-            const tbody = document.getElementById('personnelTableBody');
-            if (people.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--text-muted);">暂无数据</td></tr>';
-                return;
-            }
-
-            tbody.innerHTML = people.map((p, index) => {
-
-                // Helper to parse the raw status string which might be a python repr string or simple string
-                const parseStatus = (val) => {
-                    if (!val) return null;
-                    const strVal = String(val);
-                    if (strVal.includes('✔️') || strVal.includes('text\': \'✔️')) return 'valid';
-                    if (strVal.includes('❌') || strVal.includes('text\': \'❌')) return 'invalid';
-                    return null;
-                };
-
-                const certs = [
-                    { label: '高压', val: p.高压证_是否有效 },
-                    { label: '低压', val: p.低压证_是否有效 },
-                    { label: '制冷', val: p.制冷证_是否有效 },
-                    { label: '登高', val: p.登高证_是否有效 },
-                ];
-
-                const certBadges = certs.map(c => {
-                    const status = parseStatus(c.val);
-                    if (!status) return '';
-
-                    const cls = status === 'valid' ? 'status-success' : 'status-error';
-                    const icon = status === 'valid' ? '<i class="ri-check-line"></i>' : '<i class="ri-close-line"></i>';
-                    return `<span class="cert-badge ${cls}">${c.label} ${icon}</span>`;
-                }).join('');
-
-                return `
-                    <tr>
-                        <td style="color: var(--text-muted);">${index + 1}</td>
-                        <td style="font-weight: 500;">${p.姓名}</td>
-                        <td>${p.员工工号 || '-'}</td>
-                        <td>${p.岗位 || '-'}</td>
-                        <td style="font-family: monospace;">${p.身份证号 || '-'}</td>
-                        <td>${certBadges || '<span style="color:#d1d5db">-</span>'}</td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        // --- App Logic ---
-        let isRunning = false;
-        let pollInterval = null;
-
-        async function startTask() {
-            if (isRunning) return;
-
-            const params = {
-                app_id: document.getElementById('app_id').value,
-                app_secret: document.getElementById('app_secret').value,
-                app_token: document.getElementById('app_token').value,
-                table_id: document.getElementById('table_id').value,
-                query_mode: document.querySelector('input[name="query_mode"]:checked').value,
-                query_count: parseInt(document.getElementById('query_count').value) || 5,
-                auto_update: document.getElementById('auto_update').checked
-            };
-
-            if (!params.app_id || !params.app_secret) {
-                alert('请填写必要参数 (App ID, App Secret)');
-                return;
-            }
-
-            try {
-                const btn = document.getElementById('startBtn');
-                btn.disabled = true;
-                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 正在启动...';
-
-                setServerStatus('busy', '任务启动中');
-
-                const response = await fetch('/api/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(params)
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || 'Failed to start');
-                }
-
-                isRunning = true;
-                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 任务进行中...';
-
-                // Clear logs
-                document.getElementById('console').innerText = '任务已进入队列...\n';
-
-                // Start polling logs
-                if (pollInterval) clearInterval(pollInterval);
-                pollInterval = setInterval(pollStatus, 1000);
-
-            } catch (e) {
-                alert('启动失败: ' + e.message);
-                document.getElementById('startBtn').disabled = false;
-                document.getElementById('startBtn').innerHTML = '<i class="ri-play-fill"></i> 开始查询任务';
-                setServerStatus('active', '错误'); // green dot but error text? actually red dot better but simpler logic first
-            }
-        }
-
-        async function pollStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-
-                const consoleDiv = document.getElementById('console');
-                const isScrolledToBottom = consoleDiv.scrollHeight - consoleDiv.scrollTop <= consoleDiv.clientHeight + 50;
-
-                if (data.logs) {
-                    consoleDiv.innerText = data.logs;
-                    // parseStatsFromLogs(data.logs); // Removed old stats parsing
-                }
-
-                if (data.people) {
-                    updatePersonnelTable(data.people);
-                    document.getElementById('personnelCount').innerText = data.people.length;
-                }
-
-                if (isScrolledToBottom) {
-                    consoleDiv.scrollTop = consoleDiv.scrollHeight;
-                }
-
-                if (!isRunning && data.is_running) {
-                    // Recovering state
-                    isRunning = true;
-                    setServerStatus('busy', '运行中');
-                    const btn = document.getElementById('startBtn');
-                    btn.disabled = true;
-                    btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 任务进行中...';
-                }
-
-                if (!data.is_running && isRunning) {
-                    // Task finished
-                    isRunning = false;
-                    clearInterval(pollInterval);
-
-                    const btn = document.getElementById('startBtn');
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="ri-play-fill"></i> 开始飞书同步任务';
-
-                    const batchBtn = document.getElementById('batchStartBtn');
-                    batchBtn.disabled = false;
-                    batchBtn.innerHTML = '<i class="ri-terminal-line"></i> 通过 API 执行查询';
-
-                    setServerStatus('active', '就绪');
-
-                    // Show download button if result file exists
-                    if (data.excel_file) {
-                        const dlArea = document.getElementById('downloadArea');
-                        const dlLink = document.getElementById('lastDownloadLink');
-                        dlLink.href = `/api/download/${encodeURIComponent(data.excel_file)}`;
-                        dlArea.style.display = 'block';
-                    }
-
-                    // If batch results are available, show the result modal and button
-                    if (data.batch_results && data.batch_results.length > 0) {
-                        updateBatchResultTable(data.batch_results);
-                        document.getElementById('showBatchResultBtn').style.display = 'flex';
-                        document.getElementById('batchResultCount').innerText = data.batch_results.length;
-                        toggleBatchResultModal(true);
-                    }
-                }
-
-                // Initial connect valid
-                if (!isRunning && !pollInterval) {
-                    setServerStatus('active', '就绪');
-                }
-
-            } catch (e) {
-                setServerStatus('inactive', '已断开');
-            }
-        }
-
-        function setServerStatus(state, text) {
-            const dot = document.getElementById('serverStatusDot');
-            const label = document.getElementById('serverStatusText');
-
-            dot.className = 'status-dot ' + state;
-            label.innerText = text;
-        }
-
-        // --- Batch Search Logic ---
-        function toggleBatchResultModal(show) {
-            const modal = document.getElementById('batchResultModal');
-            if (show === true) modal.style.display = 'flex';
-            else if (show === false) modal.style.display = 'none';
-            else modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        function updateBatchResultTable(results) {
-            const tbody = document.getElementById('batchResultTableBody');
-            if (!results || results.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center; color: var(--text-muted);">暂无结果</td></tr>';
-                return;
-            }
-
-            const fields = [
-                '姓名', '初领日期', '性别', '应复审日期', '作业类别',
-                '有效期开始日期', '操作项目', '有效期结束日期', '签发机关',
-                '实际复审日期', '复审单位'
-            ];
-
-            tbody.innerHTML = results.map(row => `
-                <tr>
-                    ${fields.map(f => `<td>${row[f] || '-'}</td>`).join('')}
-                </tr>
-            `).join('');
-        }
-
-        async function startBatchTask() {
-            if (isRunning) return;
-
-            const inputStr = document.getElementById('batch_people_input').value.trim();
-            if (!inputStr) {
-                showWarning('输入校验', '请输入人员信息 JSON 列表');
-                return;
-            }
-
-            try {
-                JSON.parse(inputStr); // 仅预校验 JSON 格式
-            } catch (e) {
-                showWarning('JSON 格式错误', e.message + '\n\n请参考样例:\n[{"name": "李世龙", "id_number": "130126..."}]');
-                return;
-            }
-
-            toggleBatchConfirmModal(); // 显示确定弹窗
-        }
-
-        async function confirmBatchStart() {
-            toggleBatchConfirmModal();
-
-            const inputStr = document.getElementById('batch_people_input').value.trim();
-            const people = JSON.parse(inputStr);
-
-            try {
-                const btn = document.getElementById('batchStartBtn');
-                btn.disabled = true;
-                btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 批量处理中...';
-
-                setServerStatus('busy', '批量查询中');
-
-                const response = await fetch('/api/v1/query/batch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ people })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || 'Failed to execute batch query');
-                }
-
-                const results = await response.json();
-
-                // Since this is a direct synchronous response, we process results immediately
-                updateBatchResultTable(results);
-                document.getElementById('showBatchResultBtn').style.display = 'flex';
-                document.getElementById('batchResultCount').innerText = results.length;
-                toggleBatchResultModal(true);
-
-                // UI feedback
-                btn.disabled = false;
-                btn.innerHTML = '<i class="ri-list-settings-line"></i> 通过 API 执行查询';
-                setServerStatus('active', '就绪');
-
-                document.getElementById('console').innerText += `查询完成，获取 ${results.length} 条记录。\n`;
-
-            } catch (e) {
-                alert('启动失败: ' + e.message);
-                document.getElementById('batchStartBtn').disabled = false;
-                document.getElementById('batchStartBtn').innerHTML = '<i class="ri-list-settings-line"></i> 执行批量手动查询';
-                setServerStatus('active', '错误');
-            }
-        }
-
-        function exportBatchToCSV() {
-            const tbody = document.getElementById('batchResultTableBody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
-            if (rows.length === 0 || rows[0].innerText.includes('暂无结果')) {
-                alert('没有数据可以导出');
-                return;
-            }
-
-            const fields = [
-                '姓名', '初领日期', '性别', '应复审日期', '作业类别',
-                '有效期开始日期', '操作项目', '有效期结束日期', '签发机关',
-                '实际复审日期', '复审单位'
-            ];
-
-            let csvContent = "\uFEFF"; // Add BOM for Excel compatibility
-            csvContent += fields.join(",") + "\n";
-
-            rows.forEach(row => {
-                const cols = Array.from(row.querySelectorAll('td')).map(td => `"${td.innerText.replace(/"/g, '""')}"`);
-                csvContent += cols.join(",") + "\n";
-            });
-
-            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement("a");
-            const url = URL.createObjectURL(blob);
-            link.setAttribute("href", url);
-            link.setAttribute("download", `批量查询结果_${new Date().getTime()}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-
-
-        // --- Shutdown Modal Logic ---
-        function toggleShutdownModal() {
-            const modal = document.getElementById('shutdownModal');
-            modal.style.display = modal.style.display === 'none' ? 'flex' : 'none';
-        }
-
-        async function shutdownSystem() {
-            // Show custom modal instead of window.confirm
-            toggleShutdownModal();
-        }
-
-        async function confirmShutdown() {
-            toggleShutdownModal(); // Close modal
-
-            try {
-                // Find the original shutdown button (in header) for feedback
-                const btn = document.querySelector('button[onclick="shutdownSystem()"]');
-                if (btn) {
-                    btn.disabled = true;
-                    btn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> 正在退出...';
-                }
-
-                await fetch('/api/shutdown', { method: 'POST' });
-
-                // UX feedback
-                setServerStatus('inactive', '已停止');
-                if (pollInterval) clearInterval(pollInterval);
-
-                document.body.innerHTML = `
-                    <div style="height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-body); color: var(--text-muted);">
-                        <i class="ri-shut-down-line" style="font-size: 4rem; margin-bottom: 1rem; color: var(--text-muted);"></i>
-                        <h2 style="color: var(--text-main);">系统已关闭</h2>
-                        <p>您可以关闭此浏览器窗口了。</p>
-                    </div>
-                `;
-            } catch (e) {
-                alert('退出失败: ' + e.message);
-                // Re-enable button if failed
-                const btn = document.querySelector('button[onclick="shutdownSystem()"]');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = '<i class="ri-shut-down-line"></i> 退出系统';
-                }
-            }
-        }
-
-        // Init
-        loadConfig();
-        toggleCountInput();
-
-        // Initial poll to check if server is up / running something
-        pollStatus();
-        setInterval(() => {
-            if (!isRunning) pollStatus();
-        }, 3000);
-
-        // Update API hints with current location
-        const origin = window.location.origin;
-        document.getElementById('apiUrlHint').innerText = `${origin}/api/v1/query/batch`;
-        document.getElementById('hostHint').innerText = window.location.hostname;
-        document.querySelectorAll('.current-origin').forEach(el => el.innerText = origin);
-    </script>
+  </div>
+
+  <script>
+    const titles = {
+      overview: ['总览驾驶舱', '查看服务状态、任务进展和最近结果。'],
+      certificate: ['证书查证', '手动触发记录查证，并查看人员级进展。'],
+      photoAi: ['照片识别', '手动触发过程/收尾照片识别，并查看图片级进展。'],
+      listener: ['群消息监听', '查看飞书群监听状态和触发规则。'],
+      history: ['历史与日志', '查看历史任务和运行日志。'],
+      config: ['配置管理', '编辑本地 .env 配置。']
+    };
+
+    const state = { tasks: [], selectedCertificateTask: null, selectedPhotoTask: null };
+
+    function $(id) { return document.getElementById(id); }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...options });
+      if (!response.ok) {
+        let detail = response.statusText;
+        try { detail = (await response.json()).detail || detail; } catch (_) {}
+        throw new Error(detail);
+      }
+      return response.json();
+    }
+
+    const statusTextMap = {
+      pending: '排队中',
+      running: '处理中',
+      success: '成功',
+      failed: '失败',
+      ended: '已结束',
+      accepted: '已提交',
+      duplicate_ignored: '重复跳过',
+      fail_id: '身份信息异常',
+      fail_no_data: '未查询到证件',
+      fail_other: '查询失败',
+      debug: '调试',
+      info: '信息',
+      warning: '警告',
+      error: '错误',
+      critical: '严重'
+    };
+
+    function statusLabel(status) {
+      const key = String(status || 'pending').trim();
+      return statusTextMap[key] || key || '未知状态';
+    }
+
+    function statusClass(status) {
+      const key = String(status || 'pending').trim();
+      if (key === 'success') return 'success';
+      if (key === 'failed' || key.startsWith('fail_')) return 'failed';
+      if (key === 'ended') return 'ended';
+      if (key === 'running' || key === 'pending' || key === 'accepted') return 'running';
+      return 'pending';
+    }
+
+    function statusBadge(status) {
+      return `<span class="badge ${statusClass(status)}">${statusLabel(status)}</span>`;
+    }
+
+    function workflowName(workflow) {
+      return workflow === 'photo_ai' ? '照片识别' : workflow === 'certificate' ? '证书查证' : workflow;
+    }
+
+    function sourceName(source) {
+      const sourceMap = {
+        ui: '页面触发',
+        api: '接口触发',
+        message: '群消息',
+        feishu: '飞书触发',
+        config: '配置变更'
+      };
+      const key = String(source || '').trim();
+      return sourceMap[key] || key || '-';
+    }
+
+    function progressText(task) {
+      const total = Number(task.progress_total || 0);
+      const current = Number(task.progress_current || 0);
+      return total ? `${current}/${total}` : '-';
+    }
+
+    function progressPercent(task) {
+      const total = Number(task.progress_total || 0);
+      if (!total) return ['success', 'failed', 'ended'].includes(task.status) ? 100 : 0;
+      return Math.max(0, Math.min(100, Math.round(Number(task.progress_current || 0) * 100 / total)));
+    }
+
+    function renderTaskRows(tasks, targetId) {
+      const body = $(targetId);
+      if (!tasks.length) {
+        body.innerHTML = '<tr><td colspan="6"><div class="empty">暂无任务</div></td></tr>';
+        return;
+      }
+      body.innerHTML = tasks.map(task => `
+        <tr data-task-id="${task.task_id}">
+          <td>${task.updated_at || task.started_at || '-'}</td>
+          <td>${workflowName(task.workflow)}</td>
+          <td class="mono">${task.record_id}</td>
+          <td>${statusBadge(task.status)}</td>
+          <td>${progressText(task)}</td>
+          <td>${task.current_step || '-'}</td>
+        </tr>`).join('');
+      body.querySelectorAll('tr[data-task-id]').forEach(row => row.addEventListener('click', () => selectTask(row.dataset.taskId)));
+    }
+
+    function renderHistory(tasks) {
+      const body = $('historyBody');
+      if (!tasks.length) {
+        body.innerHTML = '<tr><td colspan="6"><div class="empty">暂无历史</div></td></tr>';
+        return;
+      }
+      body.innerHTML = tasks.map(task => `
+        <tr data-task-id="${task.task_id}">
+          <td class="mono">${task.task_id.slice(0, 10)}</td>
+          <td>${sourceName(task.source)}</td>
+          <td>${workflowName(task.workflow)}</td>
+          <td class="mono">${task.record_id}</td>
+          <td>${statusBadge(task.status)}</td>
+          <td>${task.updated_at || '-'}</td>
+        </tr>`).join('');
+      body.querySelectorAll('tr[data-task-id]').forEach(row => row.addEventListener('click', () => selectTask(row.dataset.taskId)));
+    }
+
+    function taskDetailHtml(task) {
+      if (!task) return '<div class="empty">暂无任务详情</div>';
+      const percent = progressPercent(task);
+      return `
+        <div class="task-summary">
+          <div><b>${workflowName(task.workflow)}</b> <span class="mono">${task.record_id}</span></div>
+          <div>${statusBadge(task.status)} <span class="muted">${task.current_step || ''}</span></div>
+          <div class="progress"><div class="bar" style="width:${percent}%"></div></div>
+          <div class="muted mini">进度：${progressText(task)}，来源：${sourceName(task.source)}，开始：${task.started_at || '-'}</div>
+          ${task.error ? `<div style="color:var(--red)">${task.error}</div>` : ''}
+          <pre class="mono mini" style="white-space:pre-wrap;color:var(--muted);margin:0">${JSON.stringify(task.summary || {}, null, 2)}</pre>
+        </div>`;
+    }
+
+    function detailItemsHtml(task) {
+      if (!task || !task.details || !task.details.length) return '<div class="empty">暂无明细</div>';
+      return task.details.slice().reverse().map(item => `
+        <div class="detail-item">
+          <div><b>${item.label || '-'}</b><br><small>${item.message || ''}</small></div>
+          <div>${statusBadge(item.status)}</div>
+        </div>`).join('');
+    }
+
+    async function selectTask(taskId) {
+      const task = await api(`/api/ui/tasks/${encodeURIComponent(taskId)}`);
+      if (task.workflow === 'photo_ai') {
+        state.selectedPhotoTask = task.task_id;
+        $('photoTaskDetail').innerHTML = taskDetailHtml(task);
+        $('photoDetails').innerHTML = detailItemsHtml(task);
+        switchView('photoAi');
+      } else {
+        state.selectedCertificateTask = task.task_id;
+        $('certificateTaskDetail').innerHTML = taskDetailHtml(task);
+        $('certificateDetails').innerHTML = detailItemsHtml(task);
+        switchView('certificate');
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const data = await api('/api/ui/status');
+        $('statusDot').className = 'dot';
+        $('statusText').textContent = '服务在线';
+        $('serviceAddress').textContent = `${location.protocol}//${location.host}`;
+        $('configPath').textContent = data.config_path || '-';
+        $('statTotal').textContent = data.tasks.total || 0;
+        $('statRunning').textContent = data.tasks.running || 0;
+        $('statSuccess').textContent = data.tasks.success || 0;
+        $('statFailed').textContent = data.tasks.failed || 0;
+        $('heroRunning').textContent = data.tasks.running || 0;
+        $('heroSuccess').textContent = data.tasks.success || 0;
+        $('heroFailed').textContent = data.tasks.failed || 0;
+        $('systemStatusText').innerHTML = `启动时间：${data.service.started_at}<br>服务端口：${data.service.port}<br>飞书配置：${data.listener.configured ? '已配置' : '未配置'}<br>监听客户端：${data.listener.active_client ? '已初始化' : '未初始化'}`;
+        $('queueStatusText').innerHTML = `执行中：${data.queue.active_request_id || '无'}<br>等待数：${data.queue.waiting_count || 0}<br>队列上限：${data.queue.max_queue_size}<br>超时：${data.queue.queue_timeout_seconds} 秒`;
+        $('listenerInfo').innerHTML = `监听配置：${data.listener.configured ? '已配置' : '未配置'}<br>监听群：${(data.listener.watched_groups || []).join('，') || '未限制/未填写'}<br>客户端：${data.listener.active_client ? '已初始化' : '等待触发或启动'}`;
+      } catch (error) {
+        $('statusDot').className = 'dot bad';
+        $('statusText').textContent = '连接失败';
+      }
+    }
+
+    async function refreshTasks() {
+      const tasks = await api('/api/ui/tasks?limit=80');
+      state.tasks = tasks;
+      renderTaskRows(tasks.slice(0, 8), 'recentTasksBody');
+      renderHistory(tasks);
+
+      const cert = state.selectedCertificateTask ? tasks.find(t => t.task_id === state.selectedCertificateTask) : tasks.find(t => t.workflow === 'certificate');
+      if (cert) {
+        $('certificateTaskDetail').innerHTML = taskDetailHtml(cert);
+        $('certificateDetails').innerHTML = detailItemsHtml(cert);
+      }
+      const photo = state.selectedPhotoTask ? tasks.find(t => t.task_id === state.selectedPhotoTask) : tasks.find(t => t.workflow === 'photo_ai');
+      if (photo) {
+        $('photoTaskDetail').innerHTML = taskDetailHtml(photo);
+        $('photoDetails').innerHTML = detailItemsHtml(photo);
+      }
+    }
+
+    async function refreshLogs() {
+      const logs = await api('/api/ui/logs?limit=300');
+      const box = $('logsBox');
+      box.textContent = logs.map(item => `[${item.time}] ${statusLabel(item.level)} ${item.source}: ${item.message}`).join('\n') || '暂无警告或错误日志';
+      if ($('autoScrollLogs').checked) box.scrollTop = box.scrollHeight;
+    }
+
+    async function loadConfig() {
+      const data = await api('/api/ui/config');
+      const grid = $('configGrid');
+      grid.innerHTML = data.items.map(item => `
+        <div class="config-key">${item.key}</div>
+        <div><input data-config-key="${item.key}" value="${String(item.value || '').replace(/"/g, '&quot;')}" ${item.sensitive ? 'autocomplete="off"' : ''}></div>
+        <div>${item.restart_required ? '<span class="badge pending">需重启</span>' : '<span class="badge success">即时</span>'}</div>
+      `).join('');
+    }
+
+    async function saveConfig() {
+      const values = {};
+      document.querySelectorAll('[data-config-key]').forEach(input => values[input.dataset.configKey] = input.value);
+      const result = await api('/api/ui/config', { method: 'PUT', body: JSON.stringify({ values }) });
+      $('configResult').textContent = result.message;
+      await loadConfig();
+    }
+
+    async function trigger(endpoint, inputId, resultId, buttonId) {
+      const btn = $(buttonId);
+      const recordId = $(inputId).value.trim();
+      if (!recordId) { $(resultId).textContent = '请填写记录编号'; return; }
+      btn.disabled = true;
+      try {
+        const result = await api(endpoint, { method: 'POST', body: JSON.stringify({ record_id: recordId }) });
+        $(resultId).textContent = result.status === 'accepted' ? `已提交任务：${result.task_id}` : (result.message || '请求已处理');
+        await refreshTasks();
+      } catch (error) {
+        $(resultId).textContent = `触发失败：${error.message}`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function switchView(viewId) {
+      document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === viewId));
+      document.querySelectorAll('.nav button').forEach(btn => btn.classList.toggle('active', btn.dataset.view === viewId));
+      $('viewTitle').textContent = titles[viewId][0];
+      $('viewSubtitle').textContent = titles[viewId][1];
+    }
+
+    async function refreshAll() {
+      await Promise.allSettled([refreshStatus(), refreshTasks(), refreshLogs(), loadConfig()]);
+    }
+
+    document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
+    $('certificateTriggerBtn').addEventListener('click', () => trigger('/api/ui/certificate/trigger', 'certificateRecordId', 'certificateTriggerResult', 'certificateTriggerBtn'));
+    $('photoTriggerBtn').addEventListener('click', () => trigger('/api/ui/photo-ai/trigger', 'photoRecordId', 'photoTriggerResult', 'photoTriggerBtn'));
+    $('saveConfigBtn').addEventListener('click', saveConfig);
+
+    async function boot() {
+      await refreshAll();
+      setInterval(refreshStatus, 3000);
+      setInterval(() => refreshTasks().catch(() => {}), 1000);
+      setInterval(() => refreshLogs().catch(() => {}), 1500);
+    }
+    boot();
+  </script>
 </body>
-
 </html>

@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_SOURCE_TABLE_ID = "tblWHIbp172MNjM1"    # 施工单所在表
 DEFAULT_TARGET_TABLE_ID = "tblgJT6SXjjw7iYN"    # 证书查询结果写入表
 
+WORKFLOW_CERTIFICATE = "certificate"
+WORKFLOW_PHOTO_AI = "photo_ai"
+CERTIFICATE_TITLE_KEYWORD = "特种作业查证"
+PHOTO_AI_TITLE_KEYWORD = "照片AI识别"
+
 # 模糊匹配标题关键词
 NAME_KEYWORDS = ["姓名", "名字"]
 ID_KEYWORDS = ["证件号码", "身份证号"]
@@ -109,6 +114,14 @@ class SummaryPerson:
 
 
 @dataclass
+class MessageTrigger:
+    workflow: str
+    record_id: str
+    chat_id: Optional[str]
+    title: str
+
+
+@dataclass
 class RecordProcessingContext:
     source_record_id: str
     shigong_code: str
@@ -122,6 +135,7 @@ class RecordProcessingContext:
     feishu_client: Any
     service: Any
     chat_id: Optional[str] = None
+    task_id: Optional[str] = None
     created_count: int = 0
     completed_write_tasks: int = 0
     query_successes: List[SummaryPerson] = field(default_factory=list)
@@ -153,6 +167,22 @@ class RecordProcessingContext:
             if created:
                 self.created_count += 1
             self.completed_write_tasks += 1
+            update_ui_task(
+                self.task_id,
+                current_step=f"人员回填进度 {self.completed_write_tasks}/{self.expected_write_tasks}",
+                progress_current=self.completed_write_tasks,
+                progress_total=self.expected_write_tasks,
+                summary={
+                    "created_count": self.created_count,
+                    "completed_write_tasks": self.completed_write_tasks,
+                },
+            )
+            add_ui_task_detail(
+                self.task_id,
+                label=str(person.get("name") or "未知人员"),
+                status="success" if created else "failed",
+                message=summary_person.status or ("回填成功" if created else "回填失败"),
+            )
             if self.completed_write_tasks >= self.expected_write_tasks:
                 self.done_event.set()
 
@@ -415,6 +445,124 @@ def extract_record_id(msg_data: Dict[str, Any]) -> Optional[str]:
 
     print(f"[消息处理] 未找到记录ID，消息预览: {full_text[:200]}", flush=True)
     return None
+
+
+def _extract_trigger_title_text(msg_data: Dict[str, Any]) -> str:
+    title = _extract_card_title_text(msg_data)
+    if title:
+        return title
+
+    parts = _collect_text_fragments(
+        {
+            "display_text": msg_data.get("display_text", ""),
+            "content_raw": msg_data.get("content_raw", ""),
+            "content": msg_data.get("content", ""),
+        }
+    )
+    return _normalize_search_text(parts).strip()
+
+
+def _extract_record_id_from_trigger_title(title: str, keyword: str) -> Optional[str]:
+    if keyword not in title:
+        return None
+
+    tail = title.split(keyword, 1)[1]
+    match = RECORD_ID_LABEL_PATTERN.search(tail) or RECORD_ID_FALLBACK_PATTERN.search(tail)
+    if not match:
+        match = RECORD_ID_LABEL_PATTERN.search(title) or RECORD_ID_FALLBACK_PATTERN.search(title)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def parse_message_trigger(msg_data: Dict[str, Any]) -> Optional[MessageTrigger]:
+    """按卡片标题关键字解析业务触发，避免任意 rec 文本误触发。"""
+    title = _extract_trigger_title_text(msg_data)
+    if not title:
+        return None
+
+    workflow = ""
+    keyword = ""
+    if CERTIFICATE_TITLE_KEYWORD in title:
+        workflow = WORKFLOW_CERTIFICATE
+        keyword = CERTIFICATE_TITLE_KEYWORD
+    elif PHOTO_AI_TITLE_KEYWORD in title:
+        workflow = WORKFLOW_PHOTO_AI
+        keyword = PHOTO_AI_TITLE_KEYWORD
+    else:
+        return None
+
+    record_id = _extract_record_id_from_trigger_title(title, keyword)
+    if not record_id:
+        print(f"[消息处理] 标题包含 {keyword}，但未找到记录ID，标题: {title[:200]}", flush=True)
+        return None
+
+    return MessageTrigger(
+        workflow=workflow,
+        record_id=record_id,
+        chat_id=str(msg_data.get("chat_id") or "").strip() or None,
+        title=title,
+    )
+
+
+def process_photo_ai_record_message(
+    record_id: str,
+    feishu_client,
+    chat_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> None:
+    from .photo_ai_handler import process_photo_ai_record
+
+    process_photo_ai_record(record_id, feishu_client, chat_id=chat_id, task_id=task_id)
+
+
+def create_ui_task(*, workflow: str, record_id: str, source: str, current_step: str = "已创建") -> Optional[str]:
+    try:
+        from .task_registry import TASK_REGISTRY
+
+        task = TASK_REGISTRY.create_task(
+            workflow=workflow,
+            record_id=record_id,
+            source=source,
+            current_step=current_step,
+        )
+        return task.task_id
+    except Exception as exc:
+        print(f"[任务中心] 创建任务失败: {exc}", flush=True)
+        return None
+
+
+def update_ui_task(task_id: Optional[str], **kwargs) -> None:
+    if not task_id:
+        return
+    try:
+        from .task_registry import TASK_REGISTRY
+
+        TASK_REGISTRY.update_task(task_id, **kwargs)
+    except Exception as exc:
+        print(f"[任务中心] 更新任务失败: {exc}", flush=True)
+
+
+def add_ui_task_detail(task_id: Optional[str], **kwargs) -> None:
+    if not task_id:
+        return
+    try:
+        from .task_registry import TASK_REGISTRY
+
+        TASK_REGISTRY.add_detail(task_id, **kwargs)
+    except Exception as exc:
+        print(f"[任务中心] 写入任务明细失败: {exc}", flush=True)
+
+
+def finish_ui_task(task_id: Optional[str], **kwargs) -> None:
+    if not task_id:
+        return
+    try:
+        from .task_registry import TASK_REGISTRY
+
+        TASK_REGISTRY.finish_task(task_id, **kwargs)
+    except Exception as exc:
+        print(f"[任务中心] 完成任务失败: {exc}", flush=True)
 
 
 
@@ -1008,7 +1156,12 @@ def ensure_global_workers_started() -> None:
         print("[消息处理] 已启动全局查询/写入工作线程")
 
 
-def process_record_message(record_id: str, feishu_client, chat_id: Optional[str] = None) -> None:
+def process_record_message(
+    record_id: str,
+    feishu_client,
+    chat_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> None:
     """
     完整的消息处理流程（在后台线程中执行）
 
@@ -1031,10 +1184,13 @@ def process_record_message(record_id: str, feishu_client, chat_id: Optional[str]
     print(f"[消息处理] 回填表ID: {target_table_id}")
 
     # === 步骤 1：获取飞书记录 ===
+    update_ui_task(task_id, current_step="查询飞书记录")
     print(f"[消息处理] 步骤1: 查询飞书记录...")
     fields = feishu_client.get_record(record_id, table_id=source_table_id)
     if not fields:
-        print(f"[消息处理] 未找到记录 {record_id}，退出")
+        message = f"未找到记录 {record_id}"
+        print(f"[消息处理] {message}，退出")
+        finish_ui_task(task_id, status="failed", current_step=message, error=message)
         return
 
     # 获取施工编码（源表公式字段，可能返回 dict / str化的dict / 纯文本）
@@ -1104,12 +1260,15 @@ def process_record_message(record_id: str, feishu_client, chat_id: Optional[str]
                 excel_files.append(str(local_path))
 
     if not excel_files:
-        print(f"[消息处理] 未找到 Excel 附件，退出")
+        message = "未找到 Excel 附件"
+        print(f"[消息处理] {message}，退出")
+        finish_ui_task(task_id, status="failed", current_step=message, error=message)
         return
 
     print(f"[消息处理] 找到 {len(excel_files)} 个 Excel 文件")
 
     # === 步骤 3：解析 Excel ===
+    update_ui_task(task_id, current_step="解析 Excel 人员表")
     all_personnel = []
     for excel_path in excel_files:
         print(f"[消息处理] 解析 Excel: {excel_path}")
@@ -1120,18 +1279,34 @@ def process_record_message(record_id: str, feishu_client, chat_id: Optional[str]
             print(f"[消息处理] 解析 Excel 失败: {e}")
 
     if not all_personnel:
-        print(f"[消息处理] 未解析到有效人员，退出")
+        message = "未解析到有效人员"
+        print(f"[消息处理] {message}，退出")
+        finish_ui_task(task_id, status="failed", current_step=message, error=message)
         return
 
     all_personnel = deduplicate_personnel(all_personnel)
     if not all_personnel:
-        print(f"[消息处理] 人员去重后无有效人员，退出")
+        message = "人员去重后无有效人员"
+        print(f"[消息处理] {message}，退出")
+        finish_ui_task(task_id, status="failed", current_step=message, error=message)
         return
 
     # 按作业类型分组
     perm_personnel = [p for p in all_personnel if p["has_permission"]]
     no_perm_personnel = [p for p in all_personnel if not p["has_permission"]]
     print(f"[消息处理] 共 {len(all_personnel)} 人: {len(perm_personnel)} 人需查证书, {len(no_perm_personnel)} 人直接写入")
+    update_ui_task(
+        task_id,
+        current_step="已解析人员，等待查询/回填",
+        progress_current=0,
+        progress_total=len(all_personnel),
+        summary={
+            "personnel_count": len(all_personnel),
+            "query_required_count": len(perm_personnel),
+            "direct_write_count": len(no_perm_personnel),
+            "shigong_code": shigong_code,
+        },
+    )
 
     service = CertificateService(
         feishu_config={"app_id": "", "app_secret": "", "app_token": "", "table_id": ""},
@@ -1154,6 +1329,7 @@ def process_record_message(record_id: str, feishu_client, chat_id: Optional[str]
         feishu_client=feishu_client,
         service=service,
         chat_id=chat_id,
+        task_id=task_id,
     )
 
     ensure_global_workers_started()
@@ -1191,12 +1367,28 @@ def process_record_message(record_id: str, feishu_client, chat_id: Optional[str]
         json.dump(result_summary, f, ensure_ascii=False, indent=2)
 
     send_processing_summary_to_chat(context)
+    finish_ui_task(
+        task_id,
+        status="success",
+        current_step="处理完成",
+        summary={
+            "created_count": created_count,
+            "download_dir": str(download_dir),
+            "summary_path": str(summary_path),
+        },
+    )
 
 
 # 用于记录正在处理中和近期已处理的 ID，防止同一记录重复触发导致重复插入
 _processing_ids = set()
 _recent_processed_records: Dict[str, float] = {}
 _lock = threading.Lock()
+
+
+def build_processing_key(record_id: str, workflow: str = WORKFLOW_CERTIFICATE) -> str:
+    record_id = str(record_id or "").strip()
+    workflow = str(workflow or WORKFLOW_CERTIFICATE).strip() or WORKFLOW_CERTIFICATE
+    return f"{workflow}:{record_id}"
 
 
 def get_record_dedup_ttl_seconds() -> int:
@@ -1224,34 +1416,41 @@ def _prune_recent_processed_records(now: float) -> None:
         _recent_processed_records.pop(record_id, None)
 
 
-def claim_record_processing(record_id: str) -> bool:
+def claim_record_processing(record_id: str, *, workflow: str = WORKFLOW_CERTIFICATE) -> bool:
     record_id = str(record_id or "").strip()
     if not record_id:
         return False
+    processing_key = build_processing_key(record_id, workflow)
 
     with _lock:
         now = time.time()
         _prune_recent_processed_records(now)
-        if record_id in _processing_ids:
-            print(f"[消息处理] 记录 {record_id} 正在处理中，跳过重复触发")
+        if processing_key in _processing_ids:
+            print(f"[消息处理] 记录 {processing_key} 正在处理中，跳过重复触发")
             return False
-        if record_id in _recent_processed_records:
-            print(f"[消息处理] 记录 {record_id} 已在近期处理过，跳过重复触发")
+        if processing_key in _recent_processed_records:
+            print(f"[消息处理] 记录 {processing_key} 已在近期处理过，跳过重复触发")
             return False
 
-        _processing_ids.add(record_id)
+        _processing_ids.add(processing_key)
         return True
 
 
-def finish_record_processing(record_id: str, *, remember: bool = True) -> None:
+def finish_record_processing(
+    record_id: str,
+    *,
+    workflow: str = WORKFLOW_CERTIFICATE,
+    remember: bool = True,
+) -> None:
     record_id = str(record_id or "").strip()
     if not record_id:
         return
+    processing_key = build_processing_key(record_id, workflow)
 
     with _lock:
-        _processing_ids.discard(record_id)
+        _processing_ids.discard(processing_key)
         if remember and get_record_dedup_ttl_seconds() > 0:
-            _recent_processed_records[record_id] = time.time()
+            _recent_processed_records[processing_key] = time.time()
 
 
 def handle_message_async(msg_data: Dict[str, Any], feishu_client) -> None:
@@ -1262,27 +1461,52 @@ def handle_message_async(msg_data: Dict[str, Any], feishu_client) -> None:
         msg_data: 飞书消息数据字典
         feishu_client: FeishuTableReader 实例
     """
-    record_id = extract_record_id(msg_data)
-    if not record_id:
+    trigger = parse_message_trigger(msg_data)
+    if not trigger:
         return
 
-    if not claim_record_processing(record_id):
+    if not claim_record_processing(trigger.record_id, workflow=trigger.workflow):
         return
 
-    chat_id = str(msg_data.get("chat_id") or "").strip() or None
-    print(f"[消息处理] 检测到记录ID: {record_id} (来源: {msg_data.get('msg_type', 'text')})，启动任务...")
+    task_id = create_ui_task(
+        workflow=trigger.workflow,
+        record_id=trigger.record_id,
+        source="group",
+        current_step="群消息已触发",
+    )
+    print(
+        (
+            f"[消息处理] 检测到触发: workflow={trigger.workflow}, record_id={trigger.record_id} "
+            f"(来源: {msg_data.get('msg_type', 'text')})，启动任务..."
+        ),
+        flush=True,
+    )
 
     def _task_wrapper():
         try:
-            process_record_message(record_id, feishu_client, chat_id=chat_id)
+            if trigger.workflow == WORKFLOW_PHOTO_AI:
+                process_photo_ai_record_message(
+                    trigger.record_id,
+                    feishu_client,
+                    chat_id=trigger.chat_id,
+                    task_id=task_id,
+                )
+            else:
+                process_record_message(
+                    trigger.record_id,
+                    feishu_client,
+                    chat_id=trigger.chat_id,
+                    task_id=task_id,
+                )
         except Exception as e:
-            print(f"[消息处理] 处理记录 {record_id} 时发生未捕获异常: {e}")
+            print(f"[消息处理] 处理记录 {trigger.workflow}:{trigger.record_id} 时发生未捕获异常: {e}")
+            finish_ui_task(task_id, status="failed", current_step="任务异常", error=str(e))
         finally:
-            finish_record_processing(record_id)
+            finish_record_processing(trigger.record_id, workflow=trigger.workflow)
 
     thread = threading.Thread(
         target=_task_wrapper,
-        name=f"msg-handler-{record_id}",
+        name=f"msg-handler-{trigger.workflow}-{trigger.record_id}",
         daemon=True,
     )
     thread.start()

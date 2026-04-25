@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import os
 import sys
+import threading
 
 # === 紧急修复：解决 onnxruntime 在 Windows 上的导入挂起问题 ===
 os.environ["OMP_WAIT_POLICY"] = "PASSIVE"
@@ -11,13 +13,14 @@ os.environ["OMP_NUM_THREADS"] = "1"
 print("\n🚀 [系统准备] 正在加载服务核心组件，请稍候...", flush=True)
 
 import uuid
+from datetime import datetime
 from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 project_root = Path(__file__).resolve().parents[1]
@@ -35,7 +38,11 @@ if loaded_env_path:
 else:
     print("[系统准备] 未找到 .env 文件，使用当前系统环境变量", flush=True)
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL_NAME = os.environ.get("LOG_LEVEL", "WARNING").strip().upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_NAME, logging.WARNING)
+logging.basicConfig(level=LOG_LEVEL)
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 try:
@@ -47,6 +54,7 @@ try:
     )
     from .feishu_reader import FeishuTableReader
     from .feishu_listener import create_listener_from_env
+    from .task_registry import TASK_REGISTRY, install_memory_log_handler
     from .service import (
         BatchPersonResult,
         BatchRequestCoordinator,
@@ -66,6 +74,7 @@ except ImportError:
     )
     from app.feishu_reader import FeishuTableReader
     from app.feishu_listener import create_listener_from_env
+    from app.task_registry import TASK_REGISTRY, install_memory_log_handler
     from app.service import (
         BatchPersonResult,
         BatchRequestCoordinator,
@@ -75,6 +84,7 @@ except ImportError:
         QueueTimeoutError,
     )
 
+install_memory_log_handler()
 
 MAX_BATCH_SIZE = 20
 DEFAULT_CONCURRENCY = int(os.environ.get("DEFAULT_CONCURRENCY", 3))
@@ -93,39 +103,45 @@ SUPPORTED_CERT_TYPES = (
 )
 
 app = FastAPI(title="证书批量查询回填 API (并发增强版)", version="3.1.0")
+SERVER_STARTED_AT = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 # === 飞书群消息监听器，服务启动时自动运行 ===
 _feishu_handler_client = None
 
 
+def _ensure_feishu_handler_client():
+    """初始化并复用群消息/页面触发共用的飞书客户端。"""
+    global _feishu_handler_client
+    if _feishu_handler_client is not None:
+        return _feishu_handler_client
+
+    app_id = os.environ.get("FEISHU_APP_ID", "").strip()
+    app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
+    app_token = os.environ.get("FEISHU_APP_TOKEN", "").strip()
+    table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
+    if not app_id or not app_secret:
+        return None
+
+    _feishu_handler_client = FeishuTableReader(
+        app_id=app_id,
+        app_secret=app_secret,
+        app_token=app_token,
+        table_id=table_id,
+    )
+    return _feishu_handler_client
+
+
 def _message_callback(msg: dict) -> None:
     """群消息处理回调：检测 记录ID=xxx 并触发完整业务流程"""
-    global _feishu_handler_client
-
     try:
         from .message_handler import handle_message_async
     except ImportError:
         from app.message_handler import handle_message_async
 
-    if _feishu_handler_client is None:
-        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
-        app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-        app_token = os.environ.get(
-            "FEISHU_APP_TOKEN", "X9CwbB3zhaLK7JsQZVZcFR9fnTf"
-        ).strip()
-        table_id = os.environ.get("FEISHU_TABLE_ID", "tblWHIbp172MNjM1").strip()
-
-        if app_id and app_secret:
-            _feishu_handler_client = FeishuTableReader(
-                app_id=app_id,
-                app_secret=app_secret,
-                app_token=app_token,
-                table_id=table_id,
-            )
-
-    if _feishu_handler_client:
-        handle_message_async(msg, _feishu_handler_client)
+    feishu_client = _ensure_feishu_handler_client()
+    if feishu_client:
+        handle_message_async(msg, feishu_client)
 
 
 @app.on_event("startup")
@@ -147,75 +163,206 @@ class TriggerRequest(BaseModel):
     token: Optional[str] = None  # 可选的简单鉴权 token
 
 
+class UiTriggerRequest(BaseModel):
+    record_id: str
+
+
+class UiConfigUpdateRequest(BaseModel):
+    values: Dict[str, str]
+
+
+SENSITIVE_ENV_KEYWORDS = ("SECRET", "TOKEN", "KEY", "PASSWORD")
+RESTART_REQUIRED_ENV_KEYS = {
+    "HOST",
+    "PORT",
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "FEISHU_APP_TOKEN",
+    "FEISHU_TABLE_ID",
+    "FEISHU_WATCH_GROUPS",
+}
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    upper_key = key.upper()
+    return any(keyword in upper_key for keyword in SENSITIVE_ENV_KEYWORDS)
+
+
+def _mask_value(value: str) -> str:
+    value = str(value or "")
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "••••"
+    return f"{value[:4]}••••{value[-4:]}"
+
+
+def _read_env_values() -> Dict[str, str]:
+    env_path = loaded_env_path or (project_root / ".env")
+    values: Dict[str, str] = {}
+    if env_path and Path(env_path).is_file():
+        for raw_line in Path(env_path).read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def _write_env_values(updates: Dict[str, str]) -> Path:
+    env_path = loaded_env_path or (project_root / ".env")
+    env_path = Path(env_path)
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    remaining = dict(updates)
+    output_lines: List[str] = []
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in raw_line:
+            output_lines.append(raw_line)
+            continue
+        key, _old_value = raw_line.split("=", 1)
+        clean_key = key.strip()
+        if clean_key in remaining:
+            output_lines.append(f"{clean_key}={remaining.pop(clean_key)}")
+        else:
+            output_lines.append(raw_line)
+
+    if remaining:
+        if output_lines and output_lines[-1].strip():
+            output_lines.append("")
+        output_lines.append("# Web 控制台写入配置")
+        for key, value in remaining.items():
+            output_lines.append(f"{key}={value}")
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    for key, value in updates.items():
+        os.environ[key] = value
+    return env_path
+
+
+def _normalize_record_id(record_id: str) -> str:
+    record_id = str(record_id or "").strip()
+    if not record_id.startswith("rec"):
+        raise HTTPException(status_code=400, detail="record_id 格式不正确，应以 rec 开头")
+    return record_id
+
+
+def get_configured_port() -> int:
+    raw_port = os.environ.get("PORT", "").strip()
+    if not raw_port:
+        raise RuntimeError("未配置 PORT，请在 .env 中设置 PORT")
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise RuntimeError(f"PORT 必须是数字，当前值: {raw_port}") from exc
+    if port < 1 or port > 65535:
+        raise RuntimeError(f"PORT 超出合法范围 1-65535，当前值: {port}")
+    return port
+
+
+def _start_certificate_task(record_id: str, *, source: str) -> Dict[str, Any]:
+    try:
+        from .message_handler import (
+            WORKFLOW_CERTIFICATE,
+            claim_record_processing,
+            finish_record_processing,
+            process_record_message,
+        )
+    except ImportError:
+        from app.message_handler import (
+            WORKFLOW_CERTIFICATE,
+            claim_record_processing,
+            finish_record_processing,
+            process_record_message,
+        )
+
+    feishu_client = _ensure_feishu_handler_client()
+    if not feishu_client:
+        raise HTTPException(status_code=500, detail="飞书客户端未初始化，请检查环境变量配置")
+
+    if not claim_record_processing(record_id, workflow=WORKFLOW_CERTIFICATE):
+        return {
+            "status": "duplicate_ignored",
+            "record_id": record_id,
+            "workflow": WORKFLOW_CERTIFICATE,
+            "message": "该记录正在处理或近期已处理，已跳过重复触发",
+        }
+
+    task = TASK_REGISTRY.create_task(
+        workflow=WORKFLOW_CERTIFICATE,
+        record_id=record_id,
+        source=source,
+        current_step="证书查证任务已提交",
+    )
+
+    def _run():
+        try:
+            process_record_message(record_id, feishu_client, task_id=task.task_id)
+        except Exception as exc:
+            logger.error("[UI触发] 处理证书记录 %s 失败: %s", record_id, exc, exc_info=True)
+            TASK_REGISTRY.finish_task(task.task_id, status="failed", current_step="任务异常", error=str(exc))
+        finally:
+            finish_record_processing(record_id, workflow=WORKFLOW_CERTIFICATE)
+
+    threading.Thread(target=_run, name=f"ui-certificate-{record_id}", daemon=True).start()
+    return {"status": "accepted", "record_id": record_id, "workflow": WORKFLOW_CERTIFICATE, "task_id": task.task_id}
+
+
+def _start_photo_ai_task(record_id: str, *, source: str) -> Dict[str, Any]:
+    try:
+        from .message_handler import WORKFLOW_PHOTO_AI, claim_record_processing, finish_record_processing
+        from .photo_ai_handler import process_photo_ai_record
+    except ImportError:
+        from app.message_handler import WORKFLOW_PHOTO_AI, claim_record_processing, finish_record_processing
+        from app.photo_ai_handler import process_photo_ai_record
+
+    feishu_client = _ensure_feishu_handler_client()
+    if not feishu_client:
+        raise HTTPException(status_code=500, detail="飞书客户端未初始化，请检查环境变量配置")
+
+    if not claim_record_processing(record_id, workflow=WORKFLOW_PHOTO_AI):
+        return {
+            "status": "duplicate_ignored",
+            "record_id": record_id,
+            "workflow": WORKFLOW_PHOTO_AI,
+            "message": "该记录正在处理或近期已处理，已跳过重复触发",
+        }
+
+    task = TASK_REGISTRY.create_task(
+        workflow=WORKFLOW_PHOTO_AI,
+        record_id=record_id,
+        source=source,
+        current_step="照片AI识别任务已提交",
+    )
+
+    def _run():
+        try:
+            process_photo_ai_record(record_id, feishu_client, task_id=task.task_id)
+        except Exception as exc:
+            logger.error("[UI触发] 处理照片AI记录 %s 失败: %s", record_id, exc, exc_info=True)
+            TASK_REGISTRY.finish_task(task.task_id, status="failed", current_step="任务异常", error=str(exc))
+        finally:
+            finish_record_processing(record_id, workflow=WORKFLOW_PHOTO_AI)
+
+    threading.Thread(target=_run, name=f"ui-photo-ai-{record_id}", daemon=True).start()
+    return {"status": "accepted", "record_id": record_id, "workflow": WORKFLOW_PHOTO_AI, "task_id": task.task_id}
+
+
 @app.post("/api/trigger", summary="飞书多维表格自动化直接触发接口")
 async def trigger_by_record_id(req: TriggerRequest):
     """
     供飞书多维表格自动化（HTTP请求节点）直接调用。
     无需解析群消息卡片，直接传入 record_id 触发证书查询回填流程。
-    调用示例：POST http://your-server:58000/api/trigger
+    调用示例：POST http://your-server:{PORT}/api/trigger
     Body: {"record_id": "recvgJe0RmBmIM"}
     """
-    record_id = req.record_id.strip()
-    if not record_id.startswith("rec"):
-        raise HTTPException(
-            status_code=400, detail="record_id 格式不正确，应以 rec 开头"
-        )
-
-    # 初始化 feishu client（复用已有逻辑）
-    global _feishu_handler_client
-    if _feishu_handler_client is None:
-        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
-        app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-        app_token = os.environ.get("FEISHU_APP_TOKEN", "").strip()
-        table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
-        if app_id and app_secret:
-            try:
-                from .feishu_reader import FeishuTableReader
-            except ImportError:
-                from app.feishu_reader import FeishuTableReader
-            _feishu_handler_client = FeishuTableReader(
-                app_id=app_id,
-                app_secret=app_secret,
-                app_token=app_token,
-                table_id=table_id,
-            )
-
-    if not _feishu_handler_client:
-        raise HTTPException(
-            status_code=500, detail="飞书客户端未初始化，请检查环境变量配置"
-        )
-
-    try:
-        from .message_handler import claim_record_processing, finish_record_processing, process_record_message
-    except ImportError:
-        from app.message_handler import claim_record_processing, finish_record_processing, process_record_message
-
-    import threading
-
-    if not claim_record_processing(record_id):
-        return {
-            "status": "duplicate_ignored",
-            "record_id": record_id,
-            "message": "该记录正在处理或近期已处理，已跳过重复触发",
-        }
-
-    def _run():
-        try:
-            process_record_message(record_id, _feishu_handler_client)
-        except Exception as e:
-            logger.error(f"[API触发] 处理记录 {record_id} 失败: {e}")
-        finally:
-            finish_record_processing(record_id)
-
-    thread = threading.Thread(target=_run, name=f"api-trigger-{record_id}", daemon=True)
-    thread.start()
-    logger.info(f"[API触发] 已异步启动记录 {record_id} 的处理任务")
-
-    return {
-        "status": "accepted",
-        "record_id": record_id,
-        "message": "任务已接受，正在后台处理",
-    }
+    record_id = _normalize_record_id(req.record_id)
+    result = _start_certificate_task(record_id, source="api")
+    result["message"] = "任务已接受，正在后台处理" if result["status"] == "accepted" else result.get("message")
+    return result
 
 
 class FeishuConfigRequest(BaseModel):
@@ -308,6 +455,14 @@ async def request_validation_exception_handler(
             "errors": exc.errors(),
         },
     )
+
+
+@app.get("/", include_in_schema=False)
+async def ui_index():
+    index_path = project_root / "app" / "static" / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=404, detail="前端页面不存在")
+    return FileResponse(index_path)
 
 
 def normalize_feishu_config(config: FeishuConfigRequest) -> Dict[str, str]:
@@ -424,6 +579,110 @@ def build_response(result_rows: List[BatchPersonResult]) -> List[ResultItem]:
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/api/ui/status")
+def ui_status():
+    watched_groups = [item.strip() for item in os.environ.get("FEISHU_WATCH_GROUPS", "").split(",") if item.strip()]
+    return {
+        "service": {
+            "status": "ok",
+            "started_at": SERVER_STARTED_AT,
+            "version": app.version,
+            "host": os.environ.get("HOST", "127.0.0.1"),
+            "port": get_configured_port(),
+        },
+        "listener": {
+            "configured": bool(os.environ.get("FEISHU_APP_ID") and os.environ.get("FEISHU_APP_SECRET")),
+            "active_client": _feishu_handler_client is not None,
+            "watched_groups": watched_groups,
+        },
+        "queue": REQUEST_COORDINATOR.snapshot(),
+        "tasks": TASK_REGISTRY.stats(),
+        "config_path": str(loaded_env_path or (project_root / ".env")),
+    }
+
+
+@app.get("/api/ui/tasks")
+def ui_tasks(limit: int = Query(50, ge=1, le=300)):
+    return TASK_REGISTRY.list_tasks(limit=limit)
+
+
+@app.get("/api/ui/tasks/{task_id}")
+def ui_task_detail(task_id: str):
+    task = TASK_REGISTRY.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return task
+
+
+@app.post("/api/ui/certificate/trigger")
+def ui_trigger_certificate(payload: UiTriggerRequest):
+    record_id = _normalize_record_id(payload.record_id)
+    return _start_certificate_task(record_id, source="ui")
+
+
+@app.post("/api/ui/photo-ai/trigger")
+def ui_trigger_photo_ai(payload: UiTriggerRequest):
+    record_id = _normalize_record_id(payload.record_id)
+    return _start_photo_ai_task(record_id, source="ui")
+
+
+@app.get("/api/ui/config")
+def ui_config():
+    values = _read_env_values()
+    items = []
+    for key in sorted(values):
+        value = values[key]
+        sensitive = _is_sensitive_env_key(key)
+        items.append(
+            {
+                "key": key,
+                "value": _mask_value(value) if sensitive else value,
+                "sensitive": sensitive,
+                "restart_required": key in RESTART_REQUIRED_ENV_KEYS,
+            }
+        )
+    return {
+        "path": str(loaded_env_path or (project_root / ".env")),
+        "items": items,
+        "restart_required_keys": sorted(RESTART_REQUIRED_ENV_KEYS),
+    }
+
+
+@app.put("/api/ui/config")
+def ui_update_config(payload: UiConfigUpdateRequest):
+    updates: Dict[str, str] = {}
+    for key, value in payload.values.items():
+        clean_key = str(key or "").strip()
+        if not clean_key:
+            continue
+        clean_value = str(value or "").strip()
+        if "••" in clean_value:
+            continue
+        updates[clean_key] = clean_value
+
+    if not updates:
+        return {
+            "updated": [],
+            "restart_required": [],
+            "message": "没有需要保存的配置项",
+        }
+
+    env_path = _write_env_values(updates)
+    restart_required = sorted(key for key in updates if key in RESTART_REQUIRED_ENV_KEYS)
+    TASK_REGISTRY.add_event("config", f"已保存配置: {', '.join(sorted(updates))}")
+    return {
+        "path": str(env_path),
+        "updated": sorted(updates),
+        "restart_required": restart_required,
+        "message": "配置已保存；部分配置可能需要重启服务后完全生效" if restart_required else "配置已保存",
+    }
+
+
+@app.get("/api/ui/logs")
+def ui_logs(limit: int = Query(300, ge=1, le=1000), min_level: str = Query("warning")):
+    return TASK_REGISTRY.events(limit=limit, min_level=min_level)
 
 
 @app.post(
@@ -577,5 +836,6 @@ async def query_only(
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.environ.get("PORT", 58000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = get_configured_port()
+    host = os.environ.get("HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=port, log_level=LOG_LEVEL_NAME.lower(), access_log=False)

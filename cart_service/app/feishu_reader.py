@@ -233,7 +233,7 @@ class FeishuTableReader:
             .build()
         ]
 
-    def update_record(self, record_id: str, fields: Dict[str, Any]) -> bool:
+    def update_record(self, record_id: str, fields: Dict[str, Any], table_id: Optional[str] = None) -> bool:
         if not record_id:
             return False
         if not fields:
@@ -242,7 +242,7 @@ class FeishuTableReader:
         request = (
             UpdateAppTableRecordRequest.builder()
             .app_token(self.resolve_app_token())
-            .table_id(self.table_id)
+            .table_id(table_id or self.table_id)
             .record_id(record_id)
             .request_body(
                 AppTableRecord.builder()

@@ -80,6 +80,19 @@ class FeishuReaderUnitTests(unittest.TestCase):
         self.assertTrue(reader.update_record("rec_001", {}))
         reader.client.bitable.v1.app_table_record.update.assert_not_called()
 
+    def test_update_record_allows_table_id_override(self):
+        reader = self._build_reader_without_init()
+        reader.resolve_app_token = Mock(return_value="base_xxx")
+        fake_response = MagicMock()
+        fake_response.success.return_value = True
+        reader.client.bitable.v1.app_table_record.update.return_value = fake_response
+
+        updated = reader.update_record("rec_001", {"字段": "值"}, table_id="tbl_override")
+
+        self.assertTrue(updated)
+        request = reader.client.bitable.v1.app_table_record.update.call_args[0][0]
+        self.assertEqual(request.table_id, "tbl_override")
+
     def test_get_record_retries_when_data_is_not_ready(self):
         reader = self._build_reader_without_init()
         reader.resolve_app_token = Mock(return_value="base_xxx")
