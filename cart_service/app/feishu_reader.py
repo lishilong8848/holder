@@ -180,16 +180,28 @@ class FeishuTableReader:
             raise RuntimeError(f"上传飞书附件失败：{response.code} - {response.msg}")
         return file_token
 
-    def list_records(self, *, field_names: Optional[List[str]] = None, page_size: int = 500) -> List[AppTableRecord]:
+    def list_records(
+        self,
+        *,
+        field_names: Optional[List[str]] = None,
+        page_size: int = 500,
+        table_id: Optional[str] = None,
+    ) -> List[AppTableRecord]:
         try:
-            return self._list_records(field_names=field_names, page_size=page_size)
+            return self._list_records(field_names=field_names, page_size=page_size, table_id=table_id)
         except RuntimeError:
             if not field_names:
                 raise
             logger.warning("按字段过滤拉取飞书记录失败，将自动重试全量拉取")
-            return self._list_records(field_names=None, page_size=page_size)
+            return self._list_records(field_names=None, page_size=page_size, table_id=table_id)
 
-    def _list_records(self, *, field_names: Optional[List[str]], page_size: int) -> List[AppTableRecord]:
+    def _list_records(
+        self,
+        *,
+        field_names: Optional[List[str]],
+        page_size: int,
+        table_id: Optional[str] = None,
+    ) -> List[AppTableRecord]:
         records: List[AppTableRecord] = []
         page_token: Optional[str] = None
         resolved_app_token = self.resolve_app_token()
@@ -198,7 +210,7 @@ class FeishuTableReader:
             builder = (
                 ListAppTableRecordRequest.builder()
                 .app_token(resolved_app_token)
-                .table_id(self.table_id)
+                .table_id(table_id or self.table_id)
                 .page_size(page_size)
             )
             if field_names:
