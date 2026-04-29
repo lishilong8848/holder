@@ -212,6 +212,7 @@ class FeishuTableReader:
                 .app_token(resolved_app_token)
                 .table_id(table_id or self.table_id)
                 .page_size(page_size)
+                .display_formula_ref(True)
             )
             if field_names:
                 builder = builder.field_names(json.dumps(field_names, ensure_ascii=False))
@@ -282,6 +283,7 @@ class FeishuTableReader:
                 .app_token(self.resolve_app_token())
                 .table_id(table_id or self.table_id)
                 .record_id(record_id)
+                .display_formula_ref(True)
                 .build()
             )
             response = self.client.bitable.v1.app_table_record.get(request, self._request_option())
@@ -353,6 +355,69 @@ class FeishuTableReader:
                 self._field_cache[table_id] = {}
                 
         return self._field_cache.get(table_id, {}).get(field_name, field_name)
+
+    def _get_table_fields(self, table_id: str) -> List[Dict[str, Any]]:
+        if not hasattr(self, "_field_items_cache"):
+            self._field_items_cache = {}
+        if table_id in self._field_items_cache:
+            return self._field_items_cache[table_id]
+
+        import requests
+
+        app_token = self.resolve_app_token()
+        token = self.ensure_token()
+        url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/fields"
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                items = res.json().get("data", {}).get("items", [])
+                self._field_items_cache[table_id] = items
+                return items
+            print(f"[飞书] 获取字段元数据失败: {res.text}")
+        except Exception as e:
+            print(f"[飞书] 获取字段元数据异常: {e}")
+
+        self._field_items_cache[table_id] = []
+        return []
+
+    @staticmethod
+    def _find_option_name(payload: Any, option_id: str) -> Optional[str]:
+        if isinstance(payload, dict):
+            payload_id = str(payload.get("id") or payload.get("option_id") or "").strip()
+            if payload_id == option_id:
+                for key in ("name", "text", "value"):
+                    value = payload.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+            for value in payload.values():
+                found = FeishuTableReader._find_option_name(value, option_id)
+                if found:
+                    return found
+        elif isinstance(payload, list):
+            for item in payload:
+                found = FeishuTableReader._find_option_name(item, option_id)
+                if found:
+                    return found
+        return None
+
+    def resolve_option_name(self, table_id: str, field_name: str, option_id: str) -> Optional[str]:
+        option_id = str(option_id or "").strip()
+        if not option_id:
+            return None
+
+        fields = self._get_table_fields(table_id)
+        for field in fields:
+            if field.get("field_name") == field_name or field.get("field_id") == field_name:
+                found = self._find_option_name(field, option_id)
+                if found:
+                    return found
+
+        for field in fields:
+            found = self._find_option_name(field, option_id)
+            if found:
+                return found
+        return None
 
     def download_media(self, file_token: str, table_id: str, record_id: str, field_id_or_name: str, direct_url: str = None) -> Optional[bytes]:
         """

@@ -15,17 +15,21 @@ from app.photo_ai_handler import (
     REQUIREMENT_FINAL_FIELD,
     REQUIREMENT_JOB_TYPE_FIELD,
     REQUIREMENT_PROCESS_FIELD,
+    extract_job_types,
+    field_text,
     process_photo_ai_record,
 )
 
 
 class FakeFeishuClient:
-    def __init__(self, fields, requirement_records=None):
+    def __init__(self, fields, requirement_records=None, option_names=None):
         self.fields = fields
         self.requirement_records = requirement_records or []
+        self.option_names = option_names or {}
         self.download_calls = []
         self.update_calls = []
         self.list_records_calls = []
+        self.resolve_option_calls = []
 
     def get_record(self, record_id, table_id=None):
         self.get_record_call = (record_id, table_id)
@@ -45,8 +49,22 @@ class FakeFeishuClient:
         self.update_calls.append((record_id, fields, table_id))
         return True
 
+    def resolve_option_name(self, table_id, field_name, option_id):
+        self.resolve_option_calls.append((table_id, field_name, option_id))
+        return self.option_names.get(option_id)
+
 
 class PhotoAiHandlerTests(unittest.TestCase):
+    def test_field_text_prefers_option_display_name_from_value_extra(self):
+        value = {
+            "type": "multiple_options",
+            "value": ["opt77hYEj6"],
+            "value_extra": {"options": [{"id": "opt77hYEj6", "name": "高处作业"}]},
+        }
+
+        self.assertEqual(field_text(value), "高处作业")
+        self.assertEqual(extract_job_types(value), ["高处作业"])
+
     def _run_with_temp_root(self, client):
         with tempfile.TemporaryDirectory() as temp_dir, patch(
             "app.photo_ai_handler.get_qwen_api_key", return_value="qwen-key"
@@ -163,6 +181,40 @@ class PhotoAiHandlerTests(unittest.TestCase):
         self.assertEqual(summarize.call_args.kwargs["job_type"], "高处作业")
         self.assertIn("安全带", summarize.call_args.kwargs["process_requirement"])
         self.assertEqual(client.update_calls[0], ("rec_photo_001", {PROCESS_FEEDBACK_FIELD: "融合后的反馈"}, DEFAULT_PHOTO_AI_TABLE_ID))
+
+    def test_record_job_type_option_id_is_resolved_before_matching_requirement(self):
+        client = FakeFeishuClient(
+            {
+                PROCESS_FEEDBACK_FIELD: "",
+                PHOTO_AI_JOB_TYPE_FIELD: "opt77hYEj6",
+                PROCESS_PHOTO_FIELD: [
+                    {"file_token": "tok_process", "name": "过程.jpg", "type": "image/jpeg"}
+                ],
+            },
+            requirement_records=[
+                SimpleNamespace(
+                    fields={
+                        REQUIREMENT_JOB_TYPE_FIELD: "高处作业",
+                        REQUIREMENT_PROCESS_FIELD: "过程必须佩戴安全帽并正确系挂安全带。",
+                        REQUIREMENT_FINAL_FIELD: "收尾必须清理工具材料并恢复现场围挡。",
+                    }
+                )
+            ],
+            option_names={"opt77hYEj6": "高处作业"},
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.photo_ai_handler.get_qwen_api_key", return_value="qwen-key"
+        ), patch(
+            "app.photo_ai_handler.call_qwen_vision", return_value="带规范识别结果"
+        ) as call_qwen_vision, patch(
+            "app.photo_ai_handler.summarize_recognition_results", return_value="融合后的反馈"
+        ):
+            process_photo_ai_record("rec_photo_001", client, project_root=Path(temp_dir))
+
+        self.assertEqual(client.resolve_option_calls[0], (DEFAULT_PHOTO_AI_TABLE_ID, PHOTO_AI_JOB_TYPE_FIELD, "opt77hYEj6"))
+        self.assertEqual(call_qwen_vision.call_args.kwargs["job_type"], "高处作业")
+        self.assertIn("安全带", call_qwen_vision.call_args.kwargs["process_requirement"])
 
     def test_multiple_record_job_types_combine_requirements(self):
         client = FakeFeishuClient(

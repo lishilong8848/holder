@@ -62,7 +62,33 @@ def field_text(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     if isinstance(value, dict):
-        for key in ("text", "value"):
+        value_extra = value.get("value_extra")
+        if isinstance(value_extra, dict):
+            options = value_extra.get("options")
+            if isinstance(options, list):
+                option_names = []
+                for option in options:
+                    if not isinstance(option, dict):
+                        continue
+                    option_name = field_text(option.get("name") or option.get("text"))
+                    if option_name:
+                        option_names.append(option_name)
+                if option_names:
+                    return "\n".join(option_names).strip()
+
+        options = value.get("options")
+        if isinstance(options, list):
+            option_names = []
+            for option in options:
+                if not isinstance(option, dict):
+                    continue
+                option_name = field_text(option.get("name") or option.get("text"))
+                if option_name:
+                    option_names.append(option_name)
+            if option_names:
+                return "\n".join(option_names).strip()
+
+        for key in ("text", "name", "display_value", "value"):
             if value.get(key) is not None:
                 return field_text(value.get(key))
         return str(value).strip()
@@ -142,6 +168,51 @@ def extract_job_types(value: Any) -> List[str]:
             seen.add(normalized)
             job_types.append(job_type)
     return job_types
+
+
+def is_option_id(value: str) -> bool:
+    return bool(re.fullmatch(r"opt[A-Za-z0-9]+", str(value or "").strip()))
+
+
+def resolve_job_type_option_ids(
+    feishu_client: Any,
+    table_id: str,
+    job_types: List[str],
+) -> List[str]:
+    resolved: List[str] = []
+    seen = set()
+    for job_type in job_types:
+        display_value = job_type
+        if is_option_id(job_type) and hasattr(feishu_client, "resolve_option_name"):
+            try:
+                display_value = (
+                    feishu_client.resolve_option_name(table_id, PHOTO_AI_JOB_TYPE_FIELD, job_type)
+                    or job_type
+                )
+            except Exception as exc:
+                print(f"[照片AI] 解析作业类型选项 {job_type} 失败: {exc}")
+
+        if is_option_id(display_value):
+            try:
+                requirement_reader = _build_requirement_reader(feishu_client)
+                if hasattr(requirement_reader, "resolve_option_name"):
+                    display_value = (
+                        requirement_reader.resolve_option_name(
+                            get_photo_ai_requirement_table_id(),
+                            REQUIREMENT_JOB_TYPE_FIELD,
+                            job_type,
+                        )
+                        or display_value
+                    )
+            except Exception as exc:
+                print(f"[照片AI] 通过规范表解析作业类型选项 {job_type} 失败: {exc}")
+
+        normalized = normalize_job_type(display_value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(display_value)
+    return resolved
 
 
 def _record_fields(record: Any) -> Dict[str, Any]:
@@ -323,7 +394,8 @@ def process_photo_ai_record(
 
     image_results: List[Tuple[str, str]] = []
     failed_files: List[str] = []
-    job_types = extract_job_types(fields.get(PHOTO_AI_JOB_TYPE_FIELD))
+    raw_job_types = extract_job_types(fields.get(PHOTO_AI_JOB_TYPE_FIELD))
+    job_types = resolve_job_type_option_ids(feishu_client, table_id, raw_job_types)
     matched_requirements: List[PhotoAiRequirement] = []
     combined_requirement: Optional[PhotoAiRequirement] = None
     if job_types:
@@ -331,6 +403,8 @@ def process_photo_ai_record(
         matched_requirements = match_photo_ai_requirements(job_types, requirement_records)
         combined_requirement = combine_photo_ai_requirements(job_types, matched_requirements)
         matched_names = "、".join(item.job_type for item in matched_requirements) or "未匹配到规范"
+        if raw_job_types != job_types:
+            print(f"[照片AI] 记录作业类型原始值: {'、'.join(raw_job_types)}")
         print(f"[照片AI] 记录作业类型: {'、'.join(job_types)}")
         print(f"[照片AI] 匹配作业类型规范: {matched_names}")
     else:

@@ -116,6 +116,8 @@ class FeishuReaderUnitTests(unittest.TestCase):
 
         self.assertEqual(fields, {"姓名": "张三"})
         self.assertEqual(reader.client.bitable.v1.app_table_record.get.call_count, 2)
+        success_request = reader.client.bitable.v1.app_table_record.get.call_args_list[1][0][0]
+        self.assertTrue(success_request.display_formula_ref)
         sleep.assert_called_once_with(0.1)
 
     def test_list_records_uses_field_names_and_collects_all_pages(self):
@@ -142,6 +144,7 @@ class FeishuReaderUnitTests(unittest.TestCase):
         first_request = reader.client.bitable.v1.app_table_record.list.call_args_list[0][0][0]
         second_request = reader.client.bitable.v1.app_table_record.list.call_args_list[1][0][0]
         self.assertEqual(first_request.field_names, "[\"Name\", \"ID Number\"]")
+        self.assertTrue(first_request.display_formula_ref)
         self.assertEqual(second_request.page_token, "next-page")
 
     def test_list_records_retries_without_field_names_when_filtered_request_fails(self):
@@ -167,7 +170,37 @@ class FeishuReaderUnitTests(unittest.TestCase):
         first_request = reader.client.bitable.v1.app_table_record.list.call_args_list[0][0][0]
         second_request = reader.client.bitable.v1.app_table_record.list.call_args_list[1][0][0]
         self.assertEqual(first_request.field_names, "[\"Name\"]")
+        self.assertTrue(first_request.display_formula_ref)
         self.assertIsNone(second_request.field_names)
+
+    def test_resolve_option_name_uses_field_metadata(self):
+        reader = self._build_reader_without_init()
+        reader.resolve_app_token = Mock(return_value="base_xxx")
+        reader.ensure_token = Mock(return_value="tenant-token")
+
+        response_payload = {
+            "data": {
+                "items": [
+                    {
+                        "field_name": "作业类型",
+                        "field_id": "fld_job",
+                        "property": {
+                            "options": [
+                                {"id": "opt77hYEj6", "name": "高处作业"},
+                            ]
+                        },
+                    }
+                ]
+            }
+        }
+
+        with patch("requests.get") as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = response_payload
+
+            name = reader.resolve_option_name("tbl_xxx", "作业类型", "opt77hYEj6")
+
+        self.assertEqual(name, "高处作业")
 
     def test_resolve_app_token_converts_wiki_token_to_base_token(self):
         reader = self._build_reader_without_init()
